@@ -7,6 +7,8 @@ import argparse
 from mpi4py import MPI
 import matplotlib.ticker as ticker
 import cmocean
+import torch
+from nn_model import MoistExchangesNN
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -31,6 +33,7 @@ g = 9.81
 poly_order = args.o
 a = 0.5
 upwind = True
+non_equilibrium_thermo = True
 
 exp_name_short = 'ice-bubble'
 if a == 0:
@@ -70,10 +73,33 @@ def forcing_function(solver, state, dstatedt):
     enthalpy, T, p, ie, mu_v, mu_l, mu_i = solver.get_thermodynamic_quantities(h, s, qv, ql, qi)
     dsdt_microphysics = -(mu_v * dqvdt_microphysics + mu_l * dqldt_microphysics + mu_i * dqidt_microphysics) / T
 
-    dsdt += dsdt_microphysics
-    dqvdt += dqvdt_microphysics
-    dqldt += dqldt_microphysics
-    dqidt += dqidt_microphysics
+    if non_equilibrium_thermo:
+        # parse therodynamic state to pytorch array
+        scale = 1.0e+7
+        nn_in = torch.from_numpy(np.array([dqvdt.flatten()*scale, \
+                                           dqldt.flatten()*scale, \
+                                           h.flatten()*mu_v.flatten()/scale, \
+                                           h.flatten()*mu_l.flatten()/scale, \
+                                           h.flatten()*T.flatten()]).transpose()).float()
+        # evaluate the nn and parse back as numpy array
+        mp_incs = model(nn_in).detach().numpy().reshape(T.shape)
+        # original training data with time step of 120s
+        scale_fac = solver.get_dt() / 120.0
+        # check monotonicity
+        inc = scale_fac * mp_incs * (mu_v - mu_l) / (scale * scale)
+        use = ql > 1.1*inc
+        # apply incrememnts where not breaking monotonicity
+        s  -= use * inc * (mu_v - mu_l) / (T * T)
+        qv += use * inc
+        ql -= use * inc
+    else:
+        #dsdt  += dsdt_microphysics
+        #dqvdt += dqvdt_microphysics
+        #dqldt += dqldt_microphysics
+        #dqidt += dqidt_microphysics
+        s  += dsdt_microphysics
+        qv += dqvdt_microphysics
+        ql += dqldt_microphysics
 
 
 def initial_condition(xs, ys, solver, pert):
@@ -129,6 +155,11 @@ time_list = []
 energy_list = []
 entropy_var_list = []
 water_var_list = []
+
+if non_equilibrium_thermo:
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/two_phase/prev_07/model_min_loss.pt'
+    model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
+    model.eval()
 
 if run_model:
     solver = NonEqEuler2D(

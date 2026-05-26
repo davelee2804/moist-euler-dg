@@ -74,6 +74,7 @@ class NonEqEuler2D(Euler2D):
         self.qi[:] = np.maximum(self.qw_min, self.qi)
 
     def time_step(self, dt=None):
+        state_0 = np.array(self.state)
 
         if dt is None:
             dt = self.get_dt()
@@ -82,31 +83,33 @@ class NonEqEuler2D(Euler2D):
         u_tmp = self.private_working_arrays[2]
 
         self.solve(self.state, dstatedt=k)
-        if self.forcing is not None:
-            self.forcing(self, self.state, k)
+        #if self.forcing is not None:
+        #    self.forcing(self, self.state, k)
 
         u_tmp[:] = self.state + 0.5 * dt * k
         if self.limit_water:
             self.check_positivity(u_tmp)
         self.solve(u_tmp, dstatedt=k)
-        if self.forcing is not None:
-            self.forcing(self, u_tmp, k)
+        #if self.forcing is not None:
+        #    self.forcing(self, u_tmp, k)
 
         u_tmp[:] = u_tmp[:] + 0.5 * dt * k
         if self.limit_water:
             self.check_positivity(u_tmp)
         self.solve(u_tmp, dstatedt=k)
-        if self.forcing is not None:
-            self.forcing(self, u_tmp, k)
+        #if self.forcing is not None:
+        #    self.forcing(self, u_tmp, k)
 
         u_tmp[:] = (2 / 3) * self.state + (1 / 3) * u_tmp[:] + (1 / 6) * dt * k
         if self.limit_water:
             self.check_positivity(u_tmp)
         self.solve(u_tmp, dstatedt=k)
-        if self.forcing is not None:
-            self.forcing(self, u_tmp, k)
+        #if self.forcing is not None:
+        #    self.forcing(self, u_tmp, k)
 
         self.state[:] = u_tmp + 0.5 * dt * k
+        if self.forcing is not None:
+            self.forcing(self, self.state, self.state - state_0)
         if self.limit_water:
             self.check_positivity(self.state)
 

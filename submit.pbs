@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -P dp9
+#PBS -q normal
+#PBS -l walltime=12:00:00
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l storage=gdata/access+gdata/hr22+gdata/xp65+gdata/dp9+gdata/dx2+gdata/rt52+gdata/dk92
+#PBS -l wd
+#PBS -N moist-euler
+
+module load python3/3.11.0
+module load openmpi/5.0.8
+
+#pip install --target=/g/data/dp9/dl9118/python3.11/site-packages mpi4py cmocean torch "numpy==1.23.4" "six==1.16.0" "contourpy==1.0.6" "cycler==0.11.0" "fonttools==4.22.0" "kiwisolver==1.4.4" "packaging==21.3" "pillow==9.3.0" "pyparsing==3.0.9"
+
+pip install --target=/g/data/dp9/dl9118/python3.11/site-packages -e . "numpy==1.23.4" "six==1.16.0" "contourpy==1.0.6" "cycler==0.11.0" "fonttools==4.22.0" "kiwisolver==1.4.4" "packaging==21.3" "pillow==9.3.0" "pyparsing==3.0.9"
+
+export PYTHONPATH=/g/data/dp9/dl9118/python3.11/site-packages
+
+cd non-equilibrium-experiments
+
+python3 ./three_phase_bubble.py --n 32 --o 3
+python3 ./three_phase_bubble.py --n 32 --o 3 --plot
