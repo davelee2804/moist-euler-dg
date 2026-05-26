@@ -19,5 +19,5 @@ export PYTHONPATH=/g/data/dp9/dl9118/python3.11/site-packages
 
 cd non-equilibrium-experiments
 
-python3 ./three_phase_bubble.py --n 32 --o 3
-python3 ./three_phase_bubble.py --n 32 --o 3 --plot
+python3 ./three_phase_bubble.py --n 48 --o 3
+python3 ./three_phase_bubble.py --n 48 --o 3 --plot

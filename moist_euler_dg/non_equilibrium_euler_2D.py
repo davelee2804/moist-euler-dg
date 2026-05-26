@@ -109,7 +109,7 @@ class NonEqEuler2D(Euler2D):
 
         self.state[:] = u_tmp + 0.5 * dt * k
         if self.forcing is not None:
-            self.forcing(self, self.state, self.state - state_0)
+            self.forcing(self, self.state, (self.state - state_0)/dt)
         if self.limit_water:
             self.check_positivity(self.state)
 

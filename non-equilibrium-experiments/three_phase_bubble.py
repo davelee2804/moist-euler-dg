@@ -8,7 +8,7 @@ from mpi4py import MPI
 import matplotlib.ticker as ticker
 import cmocean
 import torch
-from nn_model import MoistExchangesNN
+from nn_model import MoistExchangesNN, MoistExchangesNN_vli
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -33,7 +33,9 @@ g = 9.81
 poly_order = args.o
 a = 0.5
 upwind = True
-non_equilibrium_thermo = True
+
+non_equilibrium_thermo_2phase = True
+non_equilibrium_thermo_3phase = False
 
 exp_name_short = 'ice-bubble'
 if a == 0:
@@ -73,7 +75,7 @@ def forcing_function(solver, state, dstatedt):
     enthalpy, T, p, ie, mu_v, mu_l, mu_i = solver.get_thermodynamic_quantities(h, s, qv, ql, qi)
     dsdt_microphysics = -(mu_v * dqvdt_microphysics + mu_l * dqldt_microphysics + mu_i * dqidt_microphysics) / T
 
-    if non_equilibrium_thermo:
+    if non_equilibrium_thermo_2phase:
         # parse therodynamic state to pytorch array
         scale = 1.0e+7
         nn_in = torch.from_numpy(np.array([dqvdt.flatten()*scale, \
@@ -87,11 +89,40 @@ def forcing_function(solver, state, dstatedt):
         scale_fac = solver.get_dt() / 120.0
         # check monotonicity
         inc = scale_fac * mp_incs * (mu_v - mu_l) / (scale * scale)
-        use = ql > 1.1*inc
+        use = ql > inc
         # apply incrememnts where not breaking monotonicity
-        s  -= use * inc * (mu_v - mu_l) / (T * T)
+        s  -= use * inc * (mu_v - mu_l) / T
         qv += use * inc
         ql -= use * inc
+    elif non_equilibrium_thermo_3phase:
+        # parse therodynamic state to pytorch array
+        scale = 1.0e+7
+        nn_in = torch.from_numpy(np.array([dqvdt.flatten()*scale, \
+                                           dqldt.flatten()*scale, \
+                                           dqidt.flatten()*scale, \
+                                           h.flatten()*mu_v.flatten()/scale, \
+                                           h.flatten()*mu_l.flatten()/scale, \
+                                           h.flatten()*mu_i.flatten()/scale, \
+                                           h.flatten()*T.flatten()]).transpose()).float()
+        # evaluate the nn and parse back as numpy array
+        mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
+        # original training data with time step of 120s
+        scale_fac = solver.get_dt() / 120.0
+        # check monotonicity
+        inc_v = scale_fac * (mp_incs[:,:,:,:,0] * (mu_v - mu_l) + mp_incs[:,:,:,:,1] * (mu_v - mu_i)) / (scale * scale)
+        inc_l = scale_fac * (mp_incs[:,:,:,:,0] * (mu_l - mu_v) + mp_incs[:,:,:,:,2] * (mu_l - mu_i)) / (scale * scale)
+        inc_i = scale_fac * (mp_incs[:,:,:,:,1] * (mu_i - mu_v) + mp_incs[:,:,:,:,2] * (mu_i - mu_l)) / (scale * scale)
+        use_v = qv > -inc_v
+        use_l = ql > -inc_l
+        use_i = qi > -inc_i
+        use = np.logical_and(use_l, use_i)
+        # apply incrememnts where not breaking monotonicity
+        s  -= use * ( (mu_v - mu_l) * (mu_v - mu_l) * mp_incs[:,:,:,:,0] + \
+                      (mu_v - mu_i) * (mu_v - mu_i) * mp_incs[:,:,:,:,1] + \
+                      (mu_l - mu_i) * (mu_l - mu_i) * mp_incs[:,:,:,:,2] ) / scale / scale / T
+        qv += use * inc_v
+        ql += use * inc_l
+        qi += use * inc_i
     else:
         #dsdt  += dsdt_microphysics
         #dqvdt += dqvdt_microphysics
@@ -100,6 +131,7 @@ def forcing_function(solver, state, dstatedt):
         s  += dsdt_microphysics
         qv += dqvdt_microphysics
         ql += dqldt_microphysics
+        qi += dqidt_microphysics
 
 
 def initial_condition(xs, ys, solver, pert):
@@ -156,8 +188,12 @@ energy_list = []
 entropy_var_list = []
 water_var_list = []
 
-if non_equilibrium_thermo:
+if non_equilibrium_thermo_2phase:
     model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/two_phase/prev_07/model_min_loss.pt'
+elif  non_equilibrium_thermo_3phase:
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/wAdv_nEta_nBatch/prev_05/model_min_loss.pt'
+
+if non_equilibrium_thermo_2phase or non_equilibrium_thermo_3phase:
     model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
 
