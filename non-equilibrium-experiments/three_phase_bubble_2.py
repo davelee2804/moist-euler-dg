@@ -57,69 +57,68 @@ def forcing_function(solver, state, dstatedt):
     u, w, h, s, qv, ql, qi = solver.get_vars(state)
     dudt, dwdt, dhdt, dsdt, dqvdt, dqldt, dqidt = solver.get_vars(dstatedt)
 
-    # simple scheme - always moving towards equilibrium
-    qw = qv + ql + qi
-
-    qv_eq, ql_eq, qi_eq = solver.solve_fractions_from_entropy(h, qw, s)
-
-    time_scale = 4.0
-
-    dqvdt_microphysics = (qv_eq - qv) / time_scale
-    dqldt_microphysics = (ql_eq - ql) / time_scale
-    dqidt_microphysics = (qi_eq - qi) / time_scale
-
-    # add heating terms in dsdt
     enthalpy, T, p, ie, mu_v, mu_l, mu_i = solver.get_thermodynamic_quantities(h, s, qv, ql, qi)
-    dsdt_microphysics = -(mu_v * dqvdt_microphysics + mu_l * dqldt_microphysics + mu_i * dqidt_microphysics) / T
+
+    # material transport terms, dq_j/dt + u.\nabla q_j
+    # to be passed to the neural networks (where each stage uses dt/2 for SSP-RK3)
+    hdt = 0.5 * solver.get_dt()
+    u_dqv = qv - hdt * dqvdt
+    u_dql = ql - hdt * dqldt
+    u_dqi = qi - hdt * dqidt
 
     scale = 1.0e+7
     # parse therodynamic state to pytorch array and evaluate the nn and parse back as numpy array
-    nn_in = torch.from_numpy(np.array([dqvdt.flatten()*scale, \
-                                       dqldt.flatten()*scale, \
+    nn_in = torch.from_numpy(np.array([u_dqv.flatten()*scale, \
+                                       u_dql.flatten()*scale, \
                                        h.flatten()*mu_v.flatten()/scale, \
                                        h.flatten()*mu_l.flatten()/scale, \
                                        h.flatten()*T.flatten()]).transpose()).float()
     vl_incs = model_vl(nn_in).detach().numpy().reshape(T.shape)
 
-    nn_in = torch.from_numpy(np.array([dqvdt.flatten()*scale, \
-                                       dqidt.flatten()*scale, \
+    nn_in = torch.from_numpy(np.array([u_dqv.flatten()*scale, \
+                                       u_dqi.flatten()*scale, \
                                        h.flatten()*mu_v.flatten()/scale, \
                                        h.flatten()*mu_i.flatten()/scale, \
                                        h.flatten()*T.flatten()]).transpose()).float()
     vi_incs = model_vi(nn_in).detach().numpy().reshape(T.shape)
 
-    nn_in = torch.from_numpy(np.array([dqldt.flatten()*scale, \
-                                       dqidt.flatten()*scale, \
+    nn_in = torch.from_numpy(np.array([u_dql.flatten()*scale, \
+                                       u_dqi.flatten()*scale, \
                                        h.flatten()*mu_l.flatten()/scale, \
                                        h.flatten()*mu_i.flatten()/scale, \
                                        h.flatten()*T.flatten()]).transpose()).float()
     li_incs = model_li(nn_in).detach().numpy().reshape(T.shape)
 
     # original training data with time step of 120s
-    scale_fac = solver.get_dt() / 120.0
+    scale_fac = 0.5 * solver.get_dt()
 
-    # check monotonicity and apply incrememnts for vapor-liquid exchanges
+    # moisture mass fraction "guess" values to test monotonicity against
+    u_dqv = qv + hdt * dqvdt
+    u_dql = ql + hdt * dqldt
+    u_dqi = qi + hdt * dqidt
+
+    # check monotonicity and apply increments for vapor-liquid exchanges
     inc = scale_fac * vl_incs * (mu_v - mu_l) / (scale * scale)
-    use = ql > inc
-    s  -= use * inc * (mu_v - mu_l) / T
-    qv += use * inc
-    ql -= use * inc
+    use = u_dql > inc
+    dsdt  -= use * inc * (mu_v - mu_l) / T
+    dqvdt += use * inc
+    dqldt -= use * inc
 
-    # check monotonicity and apply incrememnts for vapor-ice exchanges
+    # check monotonicity and apply increments for vapor-ice exchanges
     inc = scale_fac * vi_incs * (mu_v - mu_i) / (scale * scale)
-    use = qi > inc
-    s  -= use * inc * (mu_v - mu_i) / T
-    qv += use * inc
-    qi -= use * inc
+    use = u_dqi > inc
+    dsdt  -= use * inc * (mu_v - mu_i) / T
+    dqvdt += use * inc
+    dqidt -= use * inc
 
-    # check monotonicity and apply incrememnts for liquid-ice exchanges
+    # check monotonicity and apply increments for liquid-ice exchanges
     inc = scale_fac * li_incs * (mu_l - mu_i) / (scale * scale)
-    use_l = ql < inc
-    use_i = qi > inc
+    use_l = u_dql < inc
+    use_i = u_dqi > inc
     use = np.logical_and(use_l, use_i)
-    s  -= use * inc * (mu_l - mu_i) / T
-    ql += use * inc
-    qi -= use * inc
+    dsdt  -= use * inc * (mu_l - mu_i) / T
+    dqldt += use * inc
+    dqidt -= use * inc
 
 
 def initial_condition(xs, ys, solver, pert):
@@ -206,7 +205,8 @@ if run_model:
 
         if rank == 0:
             print("Simulation time (unit less):", solver.time)
-            print("Wall time:", time.time() - t0, '\n')
+            print("Wall time:", time.time() - t0)
+            print("Time step:", solver.get_dt(), '\n')
 
         solver.save(solver.get_filepath(data_dir, exp_name_short))
 
