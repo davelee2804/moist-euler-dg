@@ -33,9 +33,7 @@ g = 9.81
 poly_order = args.o
 a = 0.5
 upwind = True
-
-non_equilibrium_thermo_2phase = False
-non_equilibrium_thermo_3phase = True
+non_equilibrium_thermo = True
 
 exp_name_short = 'ice-bubble-03'
 if a == 0:
@@ -152,24 +150,7 @@ def forcing_function(solver, state, dstatedt):
     # add heating terms in dsdt
     T, mu_v, mu_l, mu_i = chem_pots(h, s, qv, ql, qi)
 
-    if non_equilibrium_thermo_2phase:
-        # parse therodynamic state to pytorch array
-        scale = 1.0e+6
-        hdt = 0.5 * solver.get_dt()
-        nn_in = torch.from_numpy(np.array([mu_v.flatten()/scale, \
-                                           mu_l.flatten()/scale, \
-                                           T.flatten(), \
-                                           h.flatten()]).transpose()).float()
-        # evaluate the nn and parse back as numpy array
-        mp_incs = model(nn_in).detach().numpy().reshape(T.shape)
-        # check monotonicity
-        inc = hdt * mp_incs * (mu_v - mu_l) / (scale * scale)
-        use = ql > inc
-        # apply incrememnts where not breaking monotonicity
-        s  -= use * inc * (mu_v - mu_l) / T
-        qv += use * inc
-        ql -= use * inc
-    elif non_equilibrium_thermo_3phase:
+    if non_equilibrium_thermo:
         # parse therodynamic state to pytorch array
         scale = 1.0e+6
         hdt = 0.5 * solver.get_dt()
@@ -180,25 +161,36 @@ def forcing_function(solver, state, dstatedt):
                                            h.flatten()]).transpose()).float()
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
-        # check monotonicity
-        inc_v = hdt * (mp_incs[:,:,:,:,0] * (mu_v - mu_l) + mp_incs[:,:,:,:,1] * (mu_v - mu_i)) / scale / scale
-        inc_l = hdt * (mp_incs[:,:,:,:,0] * (mu_l - mu_v) + mp_incs[:,:,:,:,2] * (mu_l - mu_i)) / scale / scale
-        inc_i = hdt * (mp_incs[:,:,:,:,1] * (mu_i - mu_v) + mp_incs[:,:,:,:,2] * (mu_i - mu_l)) / scale / scale
+        # solution increments from transport for checking monotonicity
         u_dqv = qv + hdt * dqvdt
         u_dql = ql + hdt * dqldt
         u_dqi = qi + hdt * dqidt
-        use_v = u_dqv > inc_v
-        use_l = u_dql > inc_l
-        use_i = u_dqi > inc_i
-        use_li = np.logical_and(use_l, use_i)
-        use    = np.logical_and(use_v, use_li)
-        # apply incrememnts where not breaking monotonicity
-        dsdt  -= use * ( (mu_v - mu_l) * (mu_v - mu_l) * mp_incs[:,:,:,:,0] + \
-                         (mu_v - mu_i) * (mu_v - mu_i) * mp_incs[:,:,:,:,1] + \
-                         (mu_l - mu_i) * (mu_l - mu_i) * mp_incs[:,:,:,:,2] ) / scale / scale / T
-        dqvdt += use * inc_v
-        dqldt += use * inc_l
-        dqidt += use * inc_i
+        u_ds  = s  + hdt * dsdt
+        epsilon = 1.0e-12
+        # vapor to liquid exchange
+        inc    = mp_incs[:,:,:,:,0] * (mu_v - mu_l) / (scale * scale)
+        inc_s  = inc * (mu_v - mu_l) / T
+        use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
+        use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
+        dqvdt += use * inc
+        dqldt -= use * inc
+        dsdt  -= use * inc_s
+        # vapor to ice exchange
+        inc    = mp_incs[:,:,:,:,1] * (mu_v - mu_i) / (scale * scale)
+        inc_s  = inc * (mu_v - mu_i) / T
+        use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
+        use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
+        dqvdt += use * inc
+        dqidt -= use * inc
+        dsdt  -= use * inc_s
+        # liquid to ice exchange
+        inc    = mp_incs[:,:,:,:,2] * (mu_l - mu_i) / (scale * scale)
+        inc_s  = inc * (mu_l - mu_i) / T
+        use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
+        use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
+        dqldt += use * inc
+        dqidt -= use * inc
+        dsdt  -= use * inc_s
     else:
         # simple scheme - always moving towards equilibrium
         qw = qv + ql + qi
@@ -268,12 +260,8 @@ energy_list = []
 entropy_var_list = []
 water_var_list = []
 
-if non_equilibrium_thermo_2phase:
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/two_phase/prev_07/model_min_loss.pt'
-elif  non_equilibrium_thermo_3phase:
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/model_min_loss.pt'
-
-if non_equilibrium_thermo_2phase or non_equilibrium_thermo_3phase:
+if non_equilibrium_thermo:
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_09/model_min_loss.pt'
     model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
 
