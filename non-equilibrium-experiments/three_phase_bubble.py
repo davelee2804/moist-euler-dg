@@ -113,17 +113,12 @@ def chem_pots(rho, eta, q_v, q_l, q_i):
     #mu_l = c_l *tmp1 + c_l *(tmp2 + tmp3) + T_0*c_v*c_l*a*b*dc_dq  + L_00f
     #mu_i = c_i *tmp1 + c_i *(tmp2 + tmp3) + T_0*c_v*c_i*a*b*dc_dq
 
-    #mu_v = solver.gibbs_vapour(T, q_v, rho)
-    #mu_l = solver.gibbs_liquid(T)
-    #mu_i = solver.gibbs_ice(T)
-
     #return T, mu_v, mu_l, mu_i
 
     # Derivatives of the internal energy with respect to the 
     # mass fractions, with the internal energy given as:
     # Eldred et al., QJRMS (2022) eqn. 53
-    c_v = q_d * c_vd + q_v * c_vv + q_l * c_l + q_i * c_i
-    c_v_inv = 1.0 / c_v
+    c_v_inv = 1.0 / (q_d * c_vd + q_v * c_vv + q_l * c_l + q_i * c_i)
 
     _a = np.exp((eta - eta_0) * c_v_inv)
     _b = np.power(alpha_0d * q_d * rho, R_d * q_d * c_v_inv)
@@ -131,15 +126,26 @@ def chem_pots(rho, eta, q_v, q_l, q_i):
     T = T_0 * _a * _b * _c
 
     # d(a^f(x))/dx = a^f(x) . log(a) . df(x)/dx
-    _ad = q_d * R_d * np.log(q_d * rho * alpha_0d)
-    _av = q_v * R_v * np.log(q_v * rho * alpha_0v)
-    _tmp = T - c_v_inv * T * (_ad + _av) - T_0
+    #_ad = q_d * R_d * np.log(q_d * rho * alpha_0d)
+    #_av = q_v * R_v * np.log(q_v * rho * alpha_0v)
+    #_tmp = T - c_v_inv * T * (_ad + _av) - T_0
 
-    mu_v = c_vv * _tmp + T * R_v * np.log(q_v * rho * alpha_0v) + \
-           c_v * T_0 * _a * _b * rho * alpha_0v * np.power(alpha_0v * q_v * rho, R_v * q_v * c_v_inv - 1.0) - \
-           R_v * T_0 + L_00f + L_00s
-    mu_l = c_l * _tmp + L_00f
-    mu_i = c_i * _tmp
+    #mu_v = c_vv * _tmp + T * R_v * np.log(q_v * rho * alpha_0v) + \
+    #       T_0 * _a * _b * R_v * q_v * rho * alpha_0v * np.power(alpha_0v * q_v * rho, R_v * q_v * c_v_inv - 1.0) - \
+    #       R_v * T_0 + L_00f + L_00s
+    #mu_l = c_l * _tmp + L_00f
+    #mu_i = c_i * _tmp
+
+    # d(a^f(x))/dx = a^f(x) . log(a) . df(x)/dx
+    __d = R_d * q_d * np.log(alpha_0d * rho * q_d) * c_v_inv
+    __v = R_v * q_v * np.log(alpha_0v * rho * q_v) * c_v_inv
+
+    # d(a(x)^f(x))/dx = a(x)^f(x) . [ log(a) . df(x)/dx + f(x) / x ]
+
+    mu_v = (c_vv + R_v) * (T - T_0) - c_vv * T * __d + \
+           T * (R_v - c_v_inv * R_v * c_vv * q_v) * np.log(alpha_0v * rho * q_v) + L_00v + L_00f
+    mu_l = c_l * (T - T_0) - c_l * T * (__d + __v) + L_00f
+    mu_i = c_i * (T - T_0) - c_i * T * (__d + __v)
 
     return T, mu_v, mu_l, mu_i
 
