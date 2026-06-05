@@ -80,41 +80,6 @@ def chem_pots(rho, eta, q_v, q_l, q_i):
 
     q_d = 1.0 - q_v - q_l - q_i
 
-    # Derivatives of the internal energy with respect to the
-    # mass fractions, with the internal energy given as:
-    # Eldred et al., QJRMS (2022) eqn. 53
-    #c_p = q_d*c_pd + q_v*c_pv + q_l*c_l + q_i*c_i
-    #c_v = q_d*c_vd + q_v*c_vv + q_l*c_l + q_i*c_i
-
-    #a = np.exp((eta - eta_0)/c_v)
-    #b = np.power(alpha_0d*q_d*rho,R_d*q_d/c_v)
-    #c = np.power(alpha_0v*q_v*rho,R_v*q_v/c_v)
-
-    #T = T_0*a*b*c
-
-    # scale by c_vj for phase j
-    #da_dq = a*(eta_0 - eta)/(c_v*c_v)
-
-    # d(a^f(x))/dx = a^f(x) . log(a) . df(x)/dx
-    # scale by c_vj for phase j
-    #db_dq = -b*np.log(alpha_0d*q_d*rho)*R_d*q_d/(c_v*c_v)
-
-    # scale by c_vj for phase j = l,i
-    #dc_dq = -c*np.log(alpha_0v*q_v*rho)*R_v*q_v/(c_v*c_v)
-
-    # d(a^f(x))/dx = a(x)^f(x) [ log(a) . df(x)/dx + f(x) da(x)/dx / a(x) ]
-    #dc_dqv = c*(np.log(alpha_0v*q_v*rho)*(c_v*R_v - c_vv*R_v*q_v)/(c_v*c_v) + R_v*q_v/(c_v*q_v))
-
-    #tmp1 = T - T_0
-    #tmp2 = T_0*c_v*da_dq*b*c
-    #tmp3 = T_0*c_v*a*db_dq*c
-
-    #mu_v = c_vv*tmp1 + c_vv*(tmp2 + tmp3) + T_0*c_v*    a*b*dc_dqv - R_v*T_0 + (L_00v + L_00f)
-    #mu_l = c_l *tmp1 + c_l *(tmp2 + tmp3) + T_0*c_v*c_l*a*b*dc_dq  + L_00f
-    #mu_i = c_i *tmp1 + c_i *(tmp2 + tmp3) + T_0*c_v*c_i*a*b*dc_dq
-
-    #return T, mu_v, mu_l, mu_i
-
     # Derivatives of the internal energy with respect to the 
     # mass fractions, with the internal energy given as:
     # Eldred et al., QJRMS (2022) eqn. 53
@@ -124,17 +89,6 @@ def chem_pots(rho, eta, q_v, q_l, q_i):
     _b = np.power(alpha_0d * q_d * rho, R_d * q_d * c_v_inv)
     _c = np.power(alpha_0v * q_v * rho, R_v * q_v * c_v_inv)
     T = T_0 * _a * _b * _c
-
-    # d(a^f(x))/dx = a^f(x) . log(a) . df(x)/dx
-    #_ad = q_d * R_d * np.log(q_d * rho * alpha_0d)
-    #_av = q_v * R_v * np.log(q_v * rho * alpha_0v)
-    #_tmp = T - c_v_inv * T * (_ad + _av) - T_0
-
-    #mu_v = c_vv * _tmp + T * R_v * np.log(q_v * rho * alpha_0v) + \
-    #       T_0 * _a * _b * R_v * q_v * rho * alpha_0v * np.power(alpha_0v * q_v * rho, R_v * q_v * c_v_inv - 1.0) - \
-    #       R_v * T_0 + L_00f + L_00s
-    #mu_l = c_l * _tmp + L_00f
-    #mu_i = c_i * _tmp
 
     # d(a^f(x))/dx = a^f(x) . log(a) . df(x)/dx
     __d = R_d * q_d * np.log(alpha_0d * rho * q_d) * c_v_inv
@@ -160,10 +114,10 @@ def forcing_function(solver, state, dstatedt):
         # parse therodynamic state to pytorch array
         scale = 1.0e+6
         hdt = 0.5 * solver.get_dt()
-        nn_in = torch.from_numpy(np.array([mu_v.flatten()/scale, \
-                                           mu_l.flatten()/scale, \
-                                           mu_i.flatten()/scale, \
-                                           T.flatten(), \
+        nn_in = torch.from_numpy(np.array([qv.flatten()*scale, \
+                                           ql.flatten()*scale, \
+                                           qi.flatten()*scale, \
+                                           s.flatten(), \
                                            h.flatten()]).transpose()).float()
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
@@ -267,7 +221,7 @@ entropy_var_list = []
 water_var_list = []
 
 if non_equilibrium_thermo:
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_09/model_min_loss.pt'
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_13/model_min_loss.pt'
     model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
 
