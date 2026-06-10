@@ -514,68 +514,6 @@ class NonEqEuler2D(Euler2D):
 
         return enthalpy, T, p, ie, mu_v, mu_l, mu_i
 
-    def chem_pots(self, rho, eta, q_v, q_l, q_i):
-        p_0d     = 1.0e+5
-        p_0sat   = 611.2
-        p_0v     = p_0sat
-        R_d      = 287.5 # LFRic
-        R_v      = 461.51 # LFRic
-        T_0      = 273.15
-        alpha_0d = R_d*T_0/p_0d
-        alpha_0v = R_v*T_0/p_0v
-        alpha_l  = 0.001
-        alpha_i  = 0.0011
-        c_pd     = 1005.0 # LFRic
-        c_pv     = 1885.0
-        c_vd     = c_pd - R_d
-        c_vv     = c_pv - R_v
-        c_i      = 2106.0
-        c_l      = 4186.0
-        L_0s     = 2.834e+6
-        L_0v     = 2.5e+6
-        L_0f     = L_0s - L_0v
-        L_00s    = L_0s - (c_pv - c_i)*T_0 + alpha_i*p_0v
-        L_00v    = L_0v - (c_pv - c_l)*T_0 + alpha_l*p_0v
-        L_00f    = L_00s - L_00v
-        eta_0    = T_0
-
-        q_d = 1.0 - q_v - q_l - q_i
-
-        # Derivatives of the internal energy with respect to the
-        # mass fractions, with the internal energy given as:
-        # Eldred et al., QJRMS (2022) eqn. 53
-        c_p = q_d*c_pd + q_v*c_pv + q_l*c_l + q_i*c_i
-        c_v = q_d*c_vd + q_v*c_vv + q_l*c_l + q_i*c_i
-
-        a = np.exp((eta - eta_0)/c_v)
-        b = np.power(alpha_0d*q_d*rho,R_d*q_d/c_v)
-        c = np.power(alpha_0v*q_v*rho,R_v*q_v/c_v)
-
-        T = T_0*a*b*c
-
-        # scale by c_vj for phase j
-        da_dq = a*(eta_0 - eta)/(c_v*c_v)
-
-        # d(a^f(x))/dx = a^f(x) . log(a) . df(x)/dx
-        # scale by c_vj for phase j
-        db_dq = -b*np.log(alpha_0d*q_d*rho)*R_d*q_d/(c_v*c_v)
-
-        # scale by c_vj for phase j = l,i
-        dc_dq = -c*np.log(alpha_0v*q_v*rho)*R_v*q_v/(c_v*c_v)
-
-        # d(a^f(x))/dx = a(x)^f(x) [ log(a) . df(x)/dx + f(x) da(x)/dx / a(x) ]
-        dc_dqv = c*(np.log(alpha_0v*q_v*rho)*(c_v*R_v - c_vv*R_v*q_v)/(c_v*c_v) + R_v*q_v/(c_v*q_v))
-
-        tmp1 = T - T_0
-        tmp2 = T_0*c_v*da_dq*b*c
-        tmp3 = T_0*c_v*a*db_dq*c
-
-        mu_v = c_vv*tmp1 + c_vv*(tmp2 + tmp3) + T_0*c_v*    a*b*dc_dqv - R_v*T_0 + (L_00v + L_00f)
-        mu_l = c_l *tmp1 + c_l *(tmp2 + tmp3) + T_0*c_v*c_l*a*b*dc_dq  + L_00f
-        mu_i = c_i *tmp1 + c_i *(tmp2 + tmp3) + T_0*c_v*c_i*a*b*dc_dq
-
-        return T, mu_v, mu_l, mu_i
-
     def rh_to_qw(self, rh, p, density, np=np):
 
         R = self.Rd
