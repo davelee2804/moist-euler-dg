@@ -56,6 +56,9 @@ xmap = lambda x, z: xlim * (x - 0.5)
 vl_power_list = []
 vi_power_list = []
 li_power_list = []
+v_water_list = []
+l_water_list = []
+i_water_list = []
 
 def chem_pots(rho, eta, q_v, q_l, q_i, solver):
     p_0d     = 1.0e+5
@@ -77,10 +80,8 @@ def chem_pots(rho, eta, q_v, q_l, q_i, solver):
     L_0s     = 2.834e+6
     L_0v     = 2.5e+6
     L_0f     = L_0s - L_0v
-    #L_00s    = L_0s - (c_pv - c_i)*T_0 + alpha_i*p_0v # sign is wrong on T_0 term!!
-    #L_00v    = L_0v - (c_pv - c_l)*T_0 + alpha_l*p_0v # sign is wrong on T_0 term!!
-    L_00s    = L_0s + (c_pv - c_i)*T_0
-    L_00v    = L_0v + (c_pv - c_l)*T_0
+    L_00s    = L_0s - (c_pv - c_i)*T_0
+    L_00v    = L_0v - (c_pv - c_l)*T_0
     L_00f    = L_00s - L_00v
     eta_0    = 0.0
 
@@ -130,8 +131,8 @@ def eta_k_to_eta_d(rho, eta, q_v, q_l, q_i):
     L_0s     = 2.834e+6
     L_0v     = 2.5e+6
     L_0f     = L_0s - L_0v
-    L_00s    = L_0s + (c_pv - c_i)*T_0 # corrected via Eldred et al, QJRMS (2022), D11-12
-    L_00v    = L_0v + (c_pv - c_l)*T_0
+    L_00s    = L_0s - (c_pv - c_i)*T_0
+    L_00v    = L_0v - (c_pv - c_l)*T_0
     L_00f    = L_00s - L_00v
 
     q_d = 1.0 - q_v - q_l - q_i
@@ -148,16 +149,17 @@ def forcing_function(solver, state, dstatedt):
     T, mu_v, mu_l, mu_i = chem_pots(h, s, qv, ql, qi, solver)
 
     if non_equilibrium_thermo:
-        #s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
+        s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
         # parse therodynamic state to pytorch array
         #scale = 1.0e+6
         #scale = 1.0e+9
-        scale = 1.0e+0
+        scale = 1.0e+12
+        #scale = 1.0e+0
         hdt = 0.5 * solver.get_dt()
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
                                            qi.flatten(), \
-                                           s.flatten(), \
+                                           s_d.flatten(), \
                                            h.flatten()]).transpose())#.float()
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
@@ -169,7 +171,7 @@ def forcing_function(solver, state, dstatedt):
         epsilon = 1.0e-12
         # vapor to liquid exchange
         inc    = mp_incs[:,:,:,:,0] * (mu_v - mu_l) / scale
-        inc_s  = inc * (mu_v - mu_l) / T / scale
+        inc_s  = inc * (mu_v - mu_l) / T# / scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
         use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
@@ -178,7 +180,7 @@ def forcing_function(solver, state, dstatedt):
         vl_power_list.append(solver.integrate(use*h*h*inc_s*T))
         # vapor to ice exchange
         inc    = mp_incs[:,:,:,:,1] * (mu_v - mu_i) / scale
-        inc_s  = inc * (mu_v - mu_i) / T / scale
+        inc_s  = inc * (mu_v - mu_i) / T# / scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
@@ -187,13 +189,17 @@ def forcing_function(solver, state, dstatedt):
         vi_power_list.append(solver.integrate(use*h*h*inc_s*T))
         # liquid to ice exchange
         inc    = mp_incs[:,:,:,:,2] * (mu_l - mu_i) / scale
-        inc_s  = inc * (mu_l - mu_i) / T / scale
+        inc_s  = inc * (mu_l - mu_i) / T# / scale
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqldt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
         li_power_list.append(solver.integrate(use*h*h*inc_s*T))
+
+        v_water_list.append(solver.integrate(h*qv))
+        l_water_list.append(solver.integrate(h*ql))
+        i_water_list.append(solver.integrate(h*qi))
     else:
         # simple scheme - always moving towards equilibrium
         qw = qv + ql + qi
@@ -249,6 +255,7 @@ def initial_condition(xs, ys, solver, pert):
     print('all vapour mean:', (qv == qw).mean())
     print('ql/qw min-max:', (ql/qw).min(), (ql/qw).max())
     print('qi/qw min-max:', (qi/qw).min(), (qi/qw).max(), '\n')
+    print('L_00v:',solver.Lv0,'L_00s:',solver.Ls0,'L_00f:',solver.Lf0)
 
     return u, v, density, s, qw, qv, ql, qi
 
@@ -268,12 +275,13 @@ if non_equilibrium_thermo:
     #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_27/model_min_loss.pt'
     #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_30/model_min_loss.pt'
     #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_25/model_min_loss.pt'
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/model_min_loss.pt'
+    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/model_min_loss.pt'
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_33/model_min_loss.pt'
     model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
 
 if run_model:
-    solver = NonEqEuler2D(
+    solver = _NonEqEuler2D(
         xmap, zmap, poly_order, nx,
         g=g, cfl=cfl, a=a, nz=nz, upwind=upwind, nprocx=nproc,
         forcing=forcing_function
@@ -299,7 +307,7 @@ if run_model:
         solver.save(solver.get_filepath(data_dir, exp_name_short))
 
     if rank == 0:
-        conservation_data = np.zeros((7, len(time_list)))
+        conservation_data = np.zeros((10, len(time_list)))
         conservation_data[0, :] = np.array(time_list)
         conservation_data[1, :] = np.array(energy_list)
         conservation_data[2, :] = np.array(entropy_var_list)
@@ -307,6 +315,9 @@ if run_model:
         conservation_data[4, :] = np.array(vl_power_list)[::8]
         conservation_data[5, :] = np.array(vi_power_list)[::8]
         conservation_data[6, :] = np.array(li_power_list)[::8]
+        conservation_data[7, :] = np.array(v_water_list)[::8]
+        conservation_data[8, :] = np.array(l_water_list)[::8]
+        conservation_data[9, :] = np.array(i_water_list)[::8]
         np.save(conservation_data_fp, conservation_data)
 
         print('Energy error:', (energy_list[-1] - energy_list[0]) / energy_list[0])
@@ -327,6 +338,9 @@ elif rank == 0:
     vl_power = conservation_data[4, :][mask]
     vi_power = conservation_data[5, :][mask]
     li_power = conservation_data[6, :][mask]
+    v_water = conservation_data[7, :][mask]
+    l_water = conservation_data[8, :][mask]
+    i_water = conservation_data[9, :][mask]
     time_list = time_list[mask]
 
     e_diff = abs(np.diff(energy_list))
@@ -364,7 +378,19 @@ elif rank == 0:
     fp = os.path.join(plot_dir, f'power_{exp_name_short}')
     plt.savefig(fp, bbox_inches="tight")
 
-    solver_plot = NonEqEuler2D(xmap, zmap, poly_order, nx, g=g, cfl=0.5, a=a, nz=nz, upwind=upwind, nprocx=1)
+    plt.figure()
+    plt.plot(time_list, v_water, label='Vapor')
+    plt.plot(time_list, l_water, label='Liquid')
+    plt.plot(time_list, i_water, label='Ice')
+    plt.grid()
+    plt.legend()
+    plt.ylabel('Mass (kg)')
+    plt.xlabel('Time (s)')
+    plt.yscale('symlog', linthresh=1e-15)
+    fp = os.path.join(plot_dir, f'water_{exp_name_short}')
+    plt.savefig(fp, bbox_inches="tight")
+
+    solver_plot = _NonEqEuler2D(xmap, zmap, poly_order, nx, g=g, cfl=0.5, a=a, nz=nz, upwind=upwind, nprocx=1)
     _, _, _, s0, qw0, qv0, ql0, qi0 = initial_condition(solver_plot.xs, solver_plot.zs, solver_plot, pert=0.0)
 
 
