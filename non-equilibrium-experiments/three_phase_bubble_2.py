@@ -10,7 +10,6 @@ import cmocean
 import torch
 from nn_model import MoistExchangesNN
 
-
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
@@ -36,7 +35,7 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'ice-bubble-06'
+exp_name_short = 'ice-bubble-08'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -164,12 +163,12 @@ def forcing_function(solver, state, dstatedt):
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
         # solution increments from transport for checking monotonicity
+        epsilon = 1.0e-14
+        # vapor to liquid exchange
         u_dqv = qv + hdt * dqvdt
         u_dql = ql + hdt * dqldt
         u_dqi = qi + hdt * dqidt
         u_ds  = s  + hdt * dsdt
-        epsilon = 1.0e-12
-        # vapor to liquid exchange
         inc    = mp_incs[:,:,:,:,0] * (mu_v - mu_l) / scale
         inc_s  = inc * (mu_v - mu_l) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
@@ -179,6 +178,10 @@ def forcing_function(solver, state, dstatedt):
         dsdt  -= use * inc_s
         vl_power_list.append(solver.integrate(use*h*h*inc_s*T))
         # vapor to ice exchange
+        u_dqv = qv + hdt * dqvdt
+        u_dql = ql + hdt * dqldt
+        u_dqi = qi + hdt * dqidt
+        u_ds  = s  + hdt * dsdt
         inc    = mp_incs[:,:,:,:,1] * (mu_v - mu_i) / scale
         inc_s  = inc * (mu_v - mu_i) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
@@ -188,6 +191,10 @@ def forcing_function(solver, state, dstatedt):
         dsdt  -= use * inc_s
         vi_power_list.append(solver.integrate(use*h*h*inc_s*T))
         # liquid to ice exchange
+        u_dqv = qv + hdt * dqvdt
+        u_dql = ql + hdt * dqldt
+        u_dqi = qi + hdt * dqidt
+        u_ds  = s  + hdt * dsdt
         inc    = mp_incs[:,:,:,:,2] * (mu_l - mu_i) / scale
         inc_s  = inc * (mu_l - mu_i) / T #/ scale
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
@@ -388,6 +395,7 @@ elif rank == 0:
     plt.plot(time_list, v_water, label='Vapor')
     plt.plot(time_list, l_water, label='Liquid')
     plt.plot(time_list, i_water, label='Ice')
+    plt.plot(time_list, entropy-entropy[0], label='Entropy change')
     plt.grid()
     plt.legend()
     plt.ylabel('Mass (kg)')
