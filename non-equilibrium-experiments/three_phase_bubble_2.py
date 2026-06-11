@@ -10,6 +10,7 @@ import cmocean
 import torch
 from nn_model import MoistExchangesNN
 
+
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
@@ -35,7 +36,7 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'ice-bubble-05'
+exp_name_short = 'ice-bubble-06'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -61,7 +62,7 @@ l_water_list = []
 i_water_list = []
 entropy_list = []
 
-def chem_pots(rho, eta, q_v, q_l, q_i, solver):
+def chem_pots(rho, eta, q_v, q_l, q_i):
     p_0d     = 1.0e+5
     p_0sat   = 611.2
     p_0v     = p_0sat
@@ -81,8 +82,8 @@ def chem_pots(rho, eta, q_v, q_l, q_i, solver):
     L_0s     = 2.834e+6
     L_0v     = 2.5e+6
     L_0f     = L_0s - L_0v
-    L_00s    = L_0s - (c_pv - c_i)*T_0
-    L_00v    = L_0v - (c_pv - c_l)*T_0
+    L_00s    = L_0s - (c_pv - c_i)*T_0 + alpha_i*p_0v
+    L_00v    = L_0v - (c_pv - c_l)*T_0 + alpha_l*p_0v
     L_00f    = L_00s - L_00v
     eta_0    = 0.0
 
@@ -146,11 +147,12 @@ def forcing_function(solver, state, dstatedt):
     u, w, h, s, qv, ql, qi = solver.get_vars(state)
     dudt, dwdt, dhdt, dsdt, dqvdt, dqldt, dqidt = solver.get_vars(dstatedt)
 
+    s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
+
     # add heating terms in dsdt
-    T, mu_v, mu_l, mu_i = chem_pots(h, s, qv, ql, qi, solver)
+    T, mu_v, mu_l, mu_i = chem_pots(h, s_d, qv, ql, qi)
 
     if non_equilibrium_thermo:
-        s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
         # parse therodynamic state to pytorch array
         scale = 1.0e+12
         hdt = 0.5 * solver.get_dt()
@@ -171,7 +173,7 @@ def forcing_function(solver, state, dstatedt):
         inc    = mp_incs[:,:,:,:,0] * (mu_v - mu_l) / scale
         inc_s  = inc * (mu_v - mu_l) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
-        use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
+        #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
         dqldt -= use * inc
         dsdt  -= use * inc_s
@@ -180,7 +182,7 @@ def forcing_function(solver, state, dstatedt):
         inc    = mp_incs[:,:,:,:,1] * (mu_v - mu_i) / scale
         inc_s  = inc * (mu_v - mu_i) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
-        use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
+        #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
@@ -189,7 +191,7 @@ def forcing_function(solver, state, dstatedt):
         inc    = mp_incs[:,:,:,:,2] * (mu_l - mu_i) / scale
         inc_s  = inc * (mu_l - mu_i) / T #/ scale
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
-        use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
+        #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqldt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
@@ -259,10 +261,12 @@ def initial_condition(xs, ys, solver, pert):
     return u, v, density, s, qw, qv, ql, qi
 
 
-run_time = 600
+#run_time = 600
+run_time = 1000
 
 #tends = np.array([0.0, 200.0, 400.0, 600.0])
-tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 600.0])
+#tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 600.0])
+tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0])
 # tends = np.array([0.0, 200.0, 400.0, 479.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
