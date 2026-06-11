@@ -59,6 +59,7 @@ li_power_list = []
 v_water_list = []
 l_water_list = []
 i_water_list = []
+entropy_list = []
 
 def chem_pots(rho, eta, q_v, q_l, q_i, solver):
     p_0d     = 1.0e+5
@@ -151,10 +152,7 @@ def forcing_function(solver, state, dstatedt):
     if non_equilibrium_thermo:
         s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
         # parse therodynamic state to pytorch array
-        #scale = 1.0e+6
-        #scale = 1.0e+9
         scale = 1.0e+12
-        #scale = 1.0e+0
         hdt = 0.5 * solver.get_dt()
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
@@ -171,7 +169,7 @@ def forcing_function(solver, state, dstatedt):
         epsilon = 1.0e-12
         # vapor to liquid exchange
         inc    = mp_incs[:,:,:,:,0] * (mu_v - mu_l) / scale
-        inc_s  = inc * (mu_v - mu_l) / T# / scale
+        inc_s  = inc * (mu_v - mu_l) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
         use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
@@ -180,7 +178,7 @@ def forcing_function(solver, state, dstatedt):
         vl_power_list.append(solver.integrate(use*h*h*inc_s*T))
         # vapor to ice exchange
         inc    = mp_incs[:,:,:,:,1] * (mu_v - mu_i) / scale
-        inc_s  = inc * (mu_v - mu_i) / T# / scale
+        inc_s  = inc * (mu_v - mu_i) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
@@ -189,7 +187,7 @@ def forcing_function(solver, state, dstatedt):
         vi_power_list.append(solver.integrate(use*h*h*inc_s*T))
         # liquid to ice exchange
         inc    = mp_incs[:,:,:,:,2] * (mu_l - mu_i) / scale
-        inc_s  = inc * (mu_l - mu_i) / T# / scale
+        inc_s  = inc * (mu_l - mu_i) / T #/ scale
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqldt += use * inc
@@ -200,6 +198,7 @@ def forcing_function(solver, state, dstatedt):
         v_water_list.append(solver.integrate(h*qv))
         l_water_list.append(solver.integrate(h*ql))
         i_water_list.append(solver.integrate(h*qi))
+        entropy_list.append(solver.integrate(h*s))
     else:
         # simple scheme - always moving towards equilibrium
         qw = qv + ql + qi
@@ -262,7 +261,8 @@ def initial_condition(xs, ys, solver, pert):
 
 run_time = 600
 
-tends = np.array([0.0, 200.0, 400.0, 600.0])
+#tends = np.array([0.0, 200.0, 400.0, 600.0])
+tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 600.0])
 # tends = np.array([0.0, 200.0, 400.0, 479.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
@@ -275,13 +275,13 @@ if non_equilibrium_thermo:
     #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_27/model_min_loss.pt'
     #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_30/model_min_loss.pt'
     #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_25/model_min_loss.pt'
-    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/model_min_loss.pt'
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_33/model_min_loss.pt'
+    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_34/model_min_loss.pt'
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_35/model_min_loss.pt'
     model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
 
 if run_model:
-    solver = _NonEqEuler2D(
+    solver = NonEqEuler2D(
         xmap, zmap, poly_order, nx,
         g=g, cfl=cfl, a=a, nz=nz, upwind=upwind, nprocx=nproc,
         forcing=forcing_function
@@ -307,7 +307,7 @@ if run_model:
         solver.save(solver.get_filepath(data_dir, exp_name_short))
 
     if rank == 0:
-        conservation_data = np.zeros((10, len(time_list)))
+        conservation_data = np.zeros((11, len(time_list)))
         conservation_data[0, :] = np.array(time_list)
         conservation_data[1, :] = np.array(energy_list)
         conservation_data[2, :] = np.array(entropy_var_list)
@@ -318,6 +318,7 @@ if run_model:
         conservation_data[7, :] = np.array(v_water_list)[::8]
         conservation_data[8, :] = np.array(l_water_list)[::8]
         conservation_data[9, :] = np.array(i_water_list)[::8]
+        conservation_data[10,:] = np.array(entropy_list)[::8]
         np.save(conservation_data_fp, conservation_data)
 
         print('Energy error:', (energy_list[-1] - energy_list[0]) / energy_list[0])
@@ -341,6 +342,7 @@ elif rank == 0:
     v_water = conservation_data[7, :][mask]
     l_water = conservation_data[8, :][mask]
     i_water = conservation_data[9, :][mask]
+    entropy = conservation_data[10,:][mask]
     time_list = time_list[mask]
 
     e_diff = abs(np.diff(energy_list))
@@ -390,7 +392,7 @@ elif rank == 0:
     fp = os.path.join(plot_dir, f'water_{exp_name_short}')
     plt.savefig(fp, bbox_inches="tight")
 
-    solver_plot = _NonEqEuler2D(xmap, zmap, poly_order, nx, g=g, cfl=0.5, a=a, nz=nz, upwind=upwind, nprocx=1)
+    solver_plot = NonEqEuler2D(xmap, zmap, poly_order, nx, g=g, cfl=0.5, a=a, nz=nz, upwind=upwind, nprocx=1)
     _, _, _, s0, qw0, qv0, ql0, qi0 = initial_condition(solver_plot.xs, solver_plot.zs, solver_plot, pert=0.0)
 
 
@@ -407,7 +409,7 @@ elif rank == 0:
     plot_func_liquid = lambda s: s.project_H1(s.ql)
     plot_func_ice = lambda s: s.project_H1(s.qi)
 
-    fig_list = [plt.subplots(2, 2, sharex=True, sharey=True, figsize=(7.4, 4.8)) for _ in range(6)]
+    fig_list = [plt.subplots(2, 3, sharex=True, sharey=True, figsize=(7.4, 4.8)) for _ in range(6)]
 
     pfunc_list = [
         plot_func_entropy, plot_func_density,
@@ -423,8 +425,9 @@ elif rank == 0:
         energy.append(solver_plot.integrate(solver_plot.energy()))
 
         for (fig, axs), plot_fun, label in zip(fig_list, pfunc_list, labels):
-            ax = axs[i // 2][i % 2]
+            ax = axs[i // 3][i % 3]
             ax.tick_params(labelsize=8)
+            #ax.set_box_aspect(0.33)
 
             if label == 'ice':
                 # levels = np.linspace(0.0, 7e-3, 1000)
@@ -445,12 +448,15 @@ elif rank == 0:
             #     cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), label='Density ($\text{kg m}^{-3}$)')
             # else:
             #     cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), label=f'{label.capitalize() mass fraction'})
-            cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt))
+            #cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt))
+            cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='horizontal')
+            ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+            cbar.set_ticks(ticks)
             cbar.ax.tick_params(labelsize=8)
 
-            if (i // 2) == 1:
+            if (i // 3) == 1:
                 ax.set_xlabel('x (m)', fontsize='xx-small')
-            if (i % 2) == 0:
+            if (i % 3) == 0:
                 ax.set_ylabel('z (m)', fontsize='xx-small')
             # fig.tight_layout(w_pad=1.0, h_pad=1.0)
             fig.tight_layout()
