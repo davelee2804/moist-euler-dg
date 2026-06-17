@@ -35,7 +35,8 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'ice-bubble-08'
+exp_name_short = 'prev_35'
+#exp_name_short = 'prev_36'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -159,7 +160,7 @@ def forcing_function(solver, state, dstatedt):
                                            ql.flatten(), \
                                            qi.flatten(), \
                                            s_d.flatten(), \
-                                           h.flatten()]).transpose())#.float()
+                                           h.flatten()]).transpose())
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
         # solution increments from transport for checking monotonicity
@@ -169,7 +170,7 @@ def forcing_function(solver, state, dstatedt):
         u_dql = ql + hdt * dqldt
         u_dqi = qi + hdt * dqidt
         u_ds  = s  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,0] * (mu_v - mu_l) / scale
+        inc    = mp_incs[:,:,:,:,0] * h * (mu_v - mu_l) / scale
         inc_s  = inc * (mu_v - mu_l) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
@@ -182,7 +183,7 @@ def forcing_function(solver, state, dstatedt):
         u_dql = ql + hdt * dqldt
         u_dqi = qi + hdt * dqidt
         u_ds  = s  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,1] * (mu_v - mu_i) / scale
+        inc    = mp_incs[:,:,:,:,1] * h * (mu_v - mu_i) / scale
         inc_s  = inc * (mu_v - mu_i) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
@@ -195,7 +196,7 @@ def forcing_function(solver, state, dstatedt):
         u_dql = ql + hdt * dqldt
         u_dqi = qi + hdt * dqidt
         u_ds  = s  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,2] * (mu_l - mu_i) / scale
+        inc    = mp_incs[:,:,:,:,2] * h * (mu_l - mu_i) / scale
         inc_s  = inc * (mu_l - mu_i) / T #/ scale
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
@@ -268,13 +269,41 @@ def initial_condition(xs, ys, solver, pert):
     return u, v, density, s, qw, qv, ql, qi
 
 
-#run_time = 600
-run_time = 1000
+def get_vertical_data(a):
+    nxe = a.shape[0]
+    nze = a.shape[1]
+    nxq = a.shape[2]
+    nzq = a.shape[3]
+    az = np.zeros(nze*nzq)
+    for ii in np.arange(nze):
+        az[ii*nzq:(ii+1)*nzq] = a[nxe//2,ii,nxq//2,:]
+    return az
 
-#tends = np.array([0.0, 200.0, 400.0, 600.0])
-#tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 600.0])
-tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0])
-# tends = np.array([0.0, 200.0, 400.0, 479.0])
+
+def plot_profile(z,f,field_name):
+    plt.figure()
+    plt.plot(f,z/1000.0)
+    plt.title('initial profile: ' + field_name)
+    plt.ylabel('z (km)')
+    plt.savefig('initial_profile_'+field_name+'.png')
+
+
+def plot_initial_profiles(solver):
+    z = get_vertical_data(solver.zs)
+    h = get_vertical_data(solver.h)
+    s = get_vertical_data(solver.s)
+    qv = get_vertical_data(solver.qv)
+    ql = get_vertical_data(solver.ql)
+    qi = get_vertical_data(solver.qi)
+    plot_profile(z,h,'density')
+    plot_profile(z,s,'entropy')
+    plot_profile(z,qv,'vapor')
+    plot_profile(z,ql,'liquid')
+    plot_profile(z,qi,'ice')
+
+
+run_time = 2250
+tends = np.array([0.0, 450.0, 900.0, 1350.0, 1800.0, 2250.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
 time_list = []
@@ -283,11 +312,7 @@ entropy_var_list = []
 water_var_list = []
 
 if non_equilibrium_thermo:
-    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_27/model_min_loss.pt'
-    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_30/model_min_loss.pt'
-    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_25/model_min_loss.pt'
-    #model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_34/model_min_loss.pt'
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_35/model_min_loss.pt'
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/'+exp_name_short+'/model_min_loss.pt'
     model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model.eval()
 
@@ -299,6 +324,7 @@ if run_model:
     )
     u, v, density, s, qw, qv, ql, qi = initial_condition(solver.xs, solver.zs, solver, pert=2.0)
     solver.set_initial_condition(u, v, density, s, qv, ql, qi)
+    plot_initial_profiles(solver)
     for i, tend in enumerate(tends):
         t0 = time.time()
         while solver.time < tend:
@@ -448,7 +474,8 @@ elif rank == 0:
             elif label == 'entropy':
                 # levels = np.linspace(-30, 70, 1000)
                 levels = 1000
-                cmap = cmap = cmocean.cm.thermal
+                #cmap = cmap = cmocean.cm.thermal
+                cmap = 'nipy_spectral'
             else:
                 levels = 1000
                 cmap = 'nipy_spectral'
