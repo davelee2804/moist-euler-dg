@@ -96,7 +96,7 @@ def forcing_function(solver, state, dstatedt):
         dqvdt += use * inc
         dqldt -= use * inc
         dsdt  -= use * inc_s
-        vl_power_list.append(solver.integrate(use*h*h*inc_s*T))
+        vl_power_list.append(solver.integrate(use*h*inc_s*T))
         # vapor to ice exchange
         u_dqv = qv + hdt * dqvdt
         u_dql = ql + hdt * dqldt
@@ -109,7 +109,7 @@ def forcing_function(solver, state, dstatedt):
         dqvdt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
-        vi_power_list.append(solver.integrate(use*h*h*inc_s*T))
+        vi_power_list.append(solver.integrate(use*h*inc_s*T))
         # liquid to ice exchange
         u_dqv = qv + hdt * dqvdt
         u_dql = ql + hdt * dqldt
@@ -122,7 +122,7 @@ def forcing_function(solver, state, dstatedt):
         dqldt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
-        li_power_list.append(solver.integrate(use*h*h*inc_s*T))
+        li_power_list.append(solver.integrate(use*h*inc_s*T))
 
         v_water_list.append(solver.integrate(h*qv))
         l_water_list.append(solver.integrate(h*ql))
