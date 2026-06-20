@@ -36,7 +36,7 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'bf02-prev_35'
+exp_name_short = 'bf02-prev_47'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -66,10 +66,11 @@ def forcing_function(solver, state, dstatedt):
     u, w, h, s, qv, ql, qi = solver.get_vars(state)
     dudt, dwdt, dhdt, dsdt, dqvdt, dqldt, dqidt = solver.get_vars(dstatedt)
 
-    s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
+    #s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
 
     # add heating terms in dsdt
-    T, mu_v, mu_l, mu_i = chem_pots(h, s_d, qv, ql, qi)
+    #T, mu_v, mu_l, mu_i = chem_pots(h, s_d, qv, ql, qi)
+    _, T, _, _, mu_v, mu_l, mu_i = solver.get_thermodynamic_quantities(h, s, qv, ql, qi)
 
     if non_equilibrium_thermo:
         # parse therodynamic state to pytorch array
@@ -78,7 +79,8 @@ def forcing_function(solver, state, dstatedt):
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
                                            qi.flatten(), \
-                                           s_d.flatten(), \
+                                           #s_d.flatten(), \
+                                           s.flatten(), \
                                            h.flatten()]).transpose())
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
@@ -304,7 +306,7 @@ elif rank == 0:
     plt.plot(time_list[1:], v_water[1:], label='Vapor')
     plt.plot(time_list[1:], l_water[1:], label='Liquid')
     plt.plot(time_list[1:], i_water[1:], label='Ice')
-    plt.plot(time_list[1:], entropy[1:]-entropy[0], label='Entropy change')
+    plt.plot(time_list[1:], (entropy[1:]-entropy[0])/entropy[0], label='Entropy change (normalised)')
     plt.grid()
     plt.legend()
     plt.ylabel('Mass (kg)')
