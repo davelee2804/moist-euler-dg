@@ -54,9 +54,10 @@ comm.barrier()
 zmap = lambda x, z: z * zlim
 xmap = lambda x, z: xlim * (x - 0.5)
 
-vl_power_list = []
-vi_power_list = []
-li_power_list = []
+v_power_list = []
+l_power_list = []
+i_power_list = []
+e_power_list = []
 v_water_list = []
 l_water_list = []
 i_water_list = []
@@ -73,6 +74,10 @@ def forcing_function(solver, state, dstatedt):
     _, T, _, _, mu_v, mu_l, mu_i = solver.get_thermodynamic_quantities(h, s, qv, ql, qi)
 
     if non_equilibrium_thermo:
+        vp = 0.0
+        lp = 0.0
+        ip = 0.0
+        ep = 0.0
         # parse therodynamic state to pytorch array
         scale = 1.0e+12
         hdt = 0.5 * solver.get_dt()
@@ -98,7 +103,9 @@ def forcing_function(solver, state, dstatedt):
         dqvdt += use * inc
         dqldt -= use * inc
         dsdt  -= use * inc_s
-        vl_power_list.append(solver.integrate(use*h*inc_s*T))
+        vp += solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*mu_v*(mu_v - mu_l))
+        lp -= solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*mu_l*(mu_v - mu_l))
+        ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*(mu_v - mu_l)*(mu_v - mu_l))
         # vapor to ice exchange
         u_dqv = qv + hdt * dqvdt
         u_dql = ql + hdt * dqldt
@@ -111,7 +118,9 @@ def forcing_function(solver, state, dstatedt):
         dqvdt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
-        vi_power_list.append(solver.integrate(use*h*inc_s*T))
+        vp += solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*mu_v*(mu_v - mu_i))
+        ip -= solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*mu_i*(mu_v - mu_i))
+        ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*(mu_v - mu_i)*(mu_v - mu_i))
         # liquid to ice exchange
         u_dqv = qv + hdt * dqvdt
         u_dql = ql + hdt * dqldt
@@ -124,8 +133,13 @@ def forcing_function(solver, state, dstatedt):
         dqldt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
-        li_power_list.append(solver.integrate(use*h*inc_s*T))
-
+        lp += solver.integrate(use*h*h*mp_incs[:,:,:,:,2]*mu_l*(mu_l - mu_i))
+        ip -= solver.integrate(use*h*h*mp_incs[:,:,:,:,2]*mu_i*(mu_l - mu_i))
+        ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,2]*(mu_l - mu_i)*(mu_l - mu_i))
+        v_power_list.append(vp)
+        l_power_list.append(lp)
+        i_power_list.append(ip)
+        e_power_list.append(ep)
         v_water_list.append(solver.integrate(h*qv))
         l_water_list.append(solver.integrate(h*ql))
         i_water_list.append(solver.integrate(h*qi))
@@ -187,8 +201,8 @@ def initial_condition(xs, ys, solver, pert):
 
     return u, v, density, s, qw, qv, ql, qi
 
-run_time = 1000
-tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0])
+run_time = 1200
+tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
 time_list = []
@@ -228,18 +242,19 @@ if run_model:
         solver.save(solver.get_filepath(data_dir, exp_name_short))
 
     if rank == 0:
-        conservation_data = np.zeros((11, len(time_list)))
+        conservation_data = np.zeros((12, len(time_list)))
         conservation_data[0, :] = np.array(time_list)
         conservation_data[1, :] = np.array(energy_list)
         conservation_data[2, :] = np.array(entropy_var_list)
         conservation_data[3, :] = np.array(water_var_list)
-        conservation_data[4, :] = np.array(vl_power_list)[::8]
-        conservation_data[5, :] = np.array(vi_power_list)[::8]
-        conservation_data[6, :] = np.array(li_power_list)[::8]
-        conservation_data[7, :] = np.array(v_water_list)[::8]
-        conservation_data[8, :] = np.array(l_water_list)[::8]
-        conservation_data[9, :] = np.array(i_water_list)[::8]
-        conservation_data[10,:] = np.array(entropy_list)[::8]
+        conservation_data[4, :] = np.array(v_power_list)[::8]
+        conservation_data[5, :] = np.array(l_power_list)[::8]
+        conservation_data[6, :] = np.array(i_power_list)[::8]
+        conservation_data[7, :] = np.array(e_power_list)[::8]
+        conservation_data[8, :] = np.array(v_water_list)[::8]
+        conservation_data[9, :] = np.array(l_water_list)[::8]
+        conservation_data[10,:] = np.array(i_water_list)[::8]
+        conservation_data[11,:] = np.array(entropy_list)[::8]
         np.save(conservation_data_fp, conservation_data)
 
         print('Energy error:', (energy_list[-1] - energy_list[0]) / energy_list[0])
@@ -257,13 +272,14 @@ elif rank == 0:
     energy_list = conservation_data[1, :][mask]
     entropy_var_list = conservation_data[2, :][mask]
     water_var_list = conservation_data[3, :][mask]
-    vl_power = conservation_data[4, :][mask]
-    vi_power = conservation_data[5, :][mask]
-    li_power = conservation_data[6, :][mask]
-    v_water = conservation_data[7, :][mask]
-    l_water = conservation_data[8, :][mask]
-    i_water = conservation_data[9, :][mask]
-    entropy = conservation_data[10,:][mask]
+    v_power = conservation_data[4, :][mask] * 1.0e-12
+    l_power = conservation_data[5, :][mask] * 1.0e-12
+    i_power = conservation_data[6, :][mask] * 1.0e-12
+    e_power = conservation_data[7, :][mask] * 1.0e-12
+    v_water = conservation_data[8, :][mask]
+    l_water = conservation_data[9, :][mask]
+    i_water = conservation_data[10,:][mask]
+    entropy = conservation_data[11,:][mask]
     time_list = time_list[mask]
 
     e_diff = abs(np.diff(energy_list))
@@ -290,27 +306,32 @@ elif rank == 0:
     plt.savefig(fp, bbox_inches="tight")
 
     plt.figure()
-    plt.plot(time_list[1:], vl_power[1:], label='Vapor-liquid power')
-    plt.plot(time_list[1:], vi_power[1:], label='Vapor-ice power')
-    plt.plot(time_list[1:], li_power[1:], label='Liquid-ice power')
-    plt.plot(time_list[1:], vl_power[1:] + vi_power[1:] + li_power[1:], label='Total')
+    plt.plot(time_list[1:], v_power[1:], label='Vapor')
+    plt.plot(time_list[1:], l_power[1:], label='Liquid')
+    plt.plot(time_list[1:], i_power[1:], label='Ice')
+    plt.plot(time_list[1:], e_power[1:], label='Entropy')
+    plt.plot(time_list[1:], v_power[1:] + l_power[1:] + i_power[1:] + e_power[1:], label='Total')
     plt.grid()
     plt.legend()
     plt.ylabel('Watts (J/s)')
     plt.xlabel('Time (s)')
+    plt.title('Power')
     plt.yscale('symlog', linthresh=1e-15)
     fp = os.path.join(plot_dir, f'power_{exp_name_short}')
     plt.savefig(fp, bbox_inches="tight")
 
     plt.figure()
+    t_water = v_water + l_water + i_water
     plt.plot(time_list[1:], v_water[1:], label='Vapor')
     plt.plot(time_list[1:], l_water[1:], label='Liquid')
     plt.plot(time_list[1:], i_water[1:], label='Ice')
+    plt.plot(time_list[1:], (t_water[1:]-t_water[0])/t_water[0], label='Total water change (normalised)')
     plt.plot(time_list[1:], (entropy[1:]-entropy[0])/entropy[0], label='Entropy change (normalised)')
     plt.grid()
     plt.legend()
     plt.ylabel('Mass (kg)')
     plt.xlabel('Time (s)')
+    plt.title('Water')
     plt.yscale('symlog', linthresh=1e-15)
     fp = os.path.join(plot_dir, f'water_{exp_name_short}')
     plt.savefig(fp, bbox_inches="tight")
@@ -342,6 +363,7 @@ elif rank == 0:
     labels = ["entropy", "density", "water", "vapour", "liquid", "ice"]
 
     energy = []
+    tends = np.array([200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0])
     for i, tend in enumerate(tends):
         filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
         solver_plot.load(filepaths)
@@ -387,5 +409,54 @@ elif rank == 0:
 
     for (fig, ax), label in zip(fig_list, labels):
         plot_name = f'{label}_{exp_name_short}'
+        fp = solver_plot.get_filepath(plot_dir, plot_name, ext='png')
+        fig.savefig(fp, bbox_inches="tight")
+
+    tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0])
+    for tend in tends:
+        filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
+        solver_plot.load(filepaths)
+        fig, axs = plt.subplots(2, 2, sharex=True, sharey=True, figsize=(7.4, 4.8))
+        # entropy
+        ax = axs[0][0]
+        ax.set_title('Entropy perturbation',fontsize=10)
+        ax.tick_params(labelsize=8)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_entropy, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        # vapour
+        ax = axs[0][1]
+        ax.tick_params(labelsize=8)
+        ax.set_title('Vapour',fontsize=10)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_vapour, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        # liquid
+        ax = axs[1][0]
+        ax.set_title('Liquid',fontsize=10)
+        ax.tick_params(labelsize=8)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_liquid, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        # ice
+        ax = axs[1][1]
+        ax.set_title('Ice',fontsize=10)
+        ax.tick_params(labelsize=8)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_ice, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        plot_name = f'{exp_name_short}_{tend}'
         fp = solver_plot.get_filepath(plot_dir, plot_name, ext='png')
         fig.savefig(fp, bbox_inches="tight")
