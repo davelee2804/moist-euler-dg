@@ -36,7 +36,7 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'bf02-prev_47'
+exp_name_short = 'bf02-prev_49'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -63,9 +63,10 @@ l_water_list = []
 i_water_list = []
 entropy_list = []
 
-def forcing_function(solver, state, dstatedt):
+def forcing_function(solver, state, dstatedt, state_0, hdt):
     u, w, h, s, qv, ql, qi = solver.get_vars(state)
     dudt, dwdt, dhdt, dsdt, dqvdt, dqldt, dqidt = solver.get_vars(dstatedt)
+    _, _, _, _, qv0, ql0, qi0 = solver.get_vars(state_0)
 
     #s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
 
@@ -79,8 +80,9 @@ def forcing_function(solver, state, dstatedt):
         ip = 0.0
         ep = 0.0
         # parse therodynamic state to pytorch array
-        scale = 1.0e+12
-        hdt = 0.5 * solver.get_dt()
+        #scale = 1.0e+12
+        scale = 1.0
+        #hdt = 0.5 * solver.get_dt()
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
                                            qi.flatten(), \
@@ -89,13 +91,16 @@ def forcing_function(solver, state, dstatedt):
                                            h.flatten()]).transpose())
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
+        mp_incs[:,:,:,:,0] = (qv + ql) * mp_incs[:,:,:,:,0]
+        mp_incs[:,:,:,:,1] = (qv + qi) * mp_incs[:,:,:,:,1]
+        mp_incs[:,:,:,:,2] = (ql + qi) * mp_incs[:,:,:,:,2]
         # solution increments from transport for checking monotonicity
         epsilon = 1.0e-14
         # vapor to liquid exchange
-        u_dqv = qv + hdt * dqvdt
-        u_dql = ql + hdt * dqldt
-        u_dqi = qi + hdt * dqidt
-        u_ds  = s  + hdt * dsdt
+        u_dqv = qv0 + hdt * dqvdt
+        u_dql = ql0 + hdt * dqldt
+        u_dqi = qi0 + hdt * dqidt
+        #u_ds  = s0  + hdt * dsdt
         inc    = mp_incs[:,:,:,:,0] * h * (mu_v - mu_l) / scale
         inc_s  = inc * (mu_v - mu_l) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
@@ -107,10 +112,10 @@ def forcing_function(solver, state, dstatedt):
         lp -= solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*mu_l*(mu_v - mu_l))
         ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*(mu_v - mu_l)*(mu_v - mu_l))
         # vapor to ice exchange
-        u_dqv = qv + hdt * dqvdt
-        u_dql = ql + hdt * dqldt
-        u_dqi = qi + hdt * dqidt
-        u_ds  = s  + hdt * dsdt
+        u_dqv = qv0 + hdt * dqvdt
+        u_dql = ql0 + hdt * dqldt
+        u_dqi = qi0 + hdt * dqidt
+        #u_ds  = s0  + hdt * dsdt
         inc    = mp_incs[:,:,:,:,1] * h * (mu_v - mu_i) / scale
         inc_s  = inc * (mu_v - mu_i) / T #/ scale
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
@@ -122,10 +127,10 @@ def forcing_function(solver, state, dstatedt):
         ip -= solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*mu_i*(mu_v - mu_i))
         ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*(mu_v - mu_i)*(mu_v - mu_i))
         # liquid to ice exchange
-        u_dqv = qv + hdt * dqvdt
-        u_dql = ql + hdt * dqldt
-        u_dqi = qi + hdt * dqidt
-        u_ds  = s  + hdt * dsdt
+        u_dqv = qv0 + hdt * dqvdt
+        u_dql = ql0 + hdt * dqldt
+        u_dqi = qi0 + hdt * dqidt
+        #u_ds  = s0  + hdt * dsdt
         inc    = mp_incs[:,:,:,:,2] * h * (mu_l - mu_i) / scale
         inc_s  = inc * (mu_l - mu_i) / T #/ scale
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
@@ -201,8 +206,8 @@ def initial_condition(xs, ys, solver, pert):
 
     return u, v, density, s, qw, qv, ql, qi
 
-run_time = 1200
-tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0])
+run_time = 600
+tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
 time_list = []
@@ -247,14 +252,14 @@ if run_model:
         conservation_data[1, :] = np.array(energy_list)
         conservation_data[2, :] = np.array(entropy_var_list)
         conservation_data[3, :] = np.array(water_var_list)
-        conservation_data[4, :] = np.array(v_power_list)[::8]
-        conservation_data[5, :] = np.array(l_power_list)[::8]
-        conservation_data[6, :] = np.array(i_power_list)[::8]
-        conservation_data[7, :] = np.array(e_power_list)[::8]
-        conservation_data[8, :] = np.array(v_water_list)[::8]
-        conservation_data[9, :] = np.array(l_water_list)[::8]
-        conservation_data[10,:] = np.array(i_water_list)[::8]
-        conservation_data[11,:] = np.array(entropy_list)[::8]
+        conservation_data[4, :] = np.array(v_power_list)[::4]
+        conservation_data[5, :] = np.array(l_power_list)[::4]
+        conservation_data[6, :] = np.array(i_power_list)[::4]
+        conservation_data[7, :] = np.array(e_power_list)[::4]
+        conservation_data[8, :] = np.array(v_water_list)[::4]
+        conservation_data[9, :] = np.array(l_water_list)[::4]
+        conservation_data[10,:] = np.array(i_water_list)[::4]
+        conservation_data[11,:] = np.array(entropy_list)[::4]
         np.save(conservation_data_fp, conservation_data)
 
         print('Energy error:', (energy_list[-1] - energy_list[0]) / energy_list[0])
@@ -363,7 +368,7 @@ elif rank == 0:
     labels = ["entropy", "density", "water", "vapour", "liquid", "ice"]
 
     energy = []
-    tends = np.array([200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0])
+    tends = np.array([100.0, 200.0, 300.0, 400.0, 500.0, 600.0])
     for i, tend in enumerate(tends):
         filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
         solver_plot.load(filepaths)
@@ -412,7 +417,7 @@ elif rank == 0:
         fp = solver_plot.get_filepath(plot_dir, plot_name, ext='png')
         fig.savefig(fp, bbox_inches="tight")
 
-    tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0])
+    tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0])
     for tend in tends:
         filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
         solver_plot.load(filepaths)

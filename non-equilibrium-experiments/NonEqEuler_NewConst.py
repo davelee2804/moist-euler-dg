@@ -151,63 +151,32 @@ class _NonEqEuler2D(Euler2D):
 
         self.solve(self.state, dstatedt=k)
         if self.forcing is not None:
-            self.forcing(self, self.state, k)
+            self.forcing(self, self.state, k, self.state, 0.5 * dt)
 
         u_tmp[:] = self.state + 0.5 * dt * k
         if self.limit_water:
             self.check_positivity(u_tmp)
         self.solve(u_tmp, dstatedt=k)
         if self.forcing is not None:
-            self.forcing(self, u_tmp, k)
+            self.forcing(self, u_tmp, k, u_tmp, 0.5 * dt)
 
         u_tmp[:] = u_tmp[:] + 0.5 * dt * k
         if self.limit_water:
             self.check_positivity(u_tmp)
         self.solve(u_tmp, dstatedt=k)
         if self.forcing is not None:
-            self.forcing(self, u_tmp, k)
+            self.forcing(self, u_tmp, k, (2 / 3) * self.state + (1 / 3) * u_tmp[:], (1 / 6) * dt)
 
         u_tmp[:] = (2 / 3) * self.state + (1 / 3) * u_tmp[:] + (1 / 6) * dt * k
         if self.limit_water:
             self.check_positivity(u_tmp)
         self.solve(u_tmp, dstatedt=k)
         if self.forcing is not None:
-            self.forcing(self, u_tmp, k)
+            self.forcing(self, u_tmp, k, u_tmp, 0.5 * dt)
 
         self.state[:] = u_tmp + 0.5 * dt * k
         if self.limit_water:
             self.check_positivity(self.state)
-
-        self.time += dt
-
-    def forcing_only_time_step(self, dt=None):
-
-        if dt is None:
-            dt = self.get_dt()
-
-        k = self.private_working_arrays[1]
-        u_tmp = self.private_working_arrays[2]
-
-        if self.forcing is not None:
-            k[:] = 0.0
-            self.forcing(self, self.state, k)
-
-        u_tmp[:] = self.state + 0.5 * dt * k
-        if self.forcing is not None:
-            k[:] = 0.0
-            self.forcing(self, u_tmp, k)
-
-        u_tmp[:] = u_tmp[:] + 0.5 * dt * k
-        if self.forcing is not None:
-            k[:] = 0.0
-            self.forcing(self, u_tmp, k)
-
-        u_tmp[:] = (2 / 3) * self.state + (1 / 3) * u_tmp[:] + (1 / 6) * dt * k
-        if self.forcing is not None:
-            k[:] = 0.0
-            self.forcing(self, u_tmp, k)
-
-        self.state[:] = u_tmp + 0.5 * dt * k
 
         self.time += dt
 
@@ -351,9 +320,6 @@ class _NonEqEuler2D(Euler2D):
             state_p, dstatedt_p = self.get_boundary_data(state, ip), self.get_boundary_data(dstatedt, ip)
             state_m, dstatedt_m = self.get_boundary_data(state, im), self.get_boundary_data(dstatedt, im)
             self.solve_boundaries(state_p, state_m, dstatedt_p, dstatedt_m, 'x', idx=ip)
-
-        if self.forcing is not None:
-            self.forcing(self, state, dstatedt)
 
         return dstatedt
 
