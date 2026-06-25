@@ -36,7 +36,7 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'bf02-prev_49'
+exp_name_short = 'bf02-prev006'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -81,7 +81,6 @@ def forcing_function(solver, state, dstatedt, state_0, hdt):
         ep = 0.0
         # parse therodynamic state to pytorch array
         #scale = 1.0e+12
-        scale = 1.0
         #hdt = 0.5 * solver.get_dt()
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
@@ -101,8 +100,8 @@ def forcing_function(solver, state, dstatedt, state_0, hdt):
         u_dql = ql0 + hdt * dqldt
         u_dqi = qi0 + hdt * dqidt
         #u_ds  = s0  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,0] * h * (mu_v - mu_l) / scale
-        inc_s  = inc * (mu_v - mu_l) / T #/ scale
+        inc    = mp_incs[:,:,:,:,0] * h * (mu_v - mu_l) #/ scale
+        inc_s  = inc * (mu_v - mu_l) / T
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
@@ -116,8 +115,8 @@ def forcing_function(solver, state, dstatedt, state_0, hdt):
         u_dql = ql0 + hdt * dqldt
         u_dqi = qi0 + hdt * dqidt
         #u_ds  = s0  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,1] * h * (mu_v - mu_i) / scale
-        inc_s  = inc * (mu_v - mu_i) / T #/ scale
+        inc    = mp_incs[:,:,:,:,1] * h * (mu_v - mu_i) #/ scale
+        inc_s  = inc * (mu_v - mu_i) / T
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
@@ -131,8 +130,8 @@ def forcing_function(solver, state, dstatedt, state_0, hdt):
         u_dql = ql0 + hdt * dqldt
         u_dqi = qi0 + hdt * dqidt
         #u_ds  = s0  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,2] * h * (mu_l - mu_i) / scale
-        inc_s  = inc * (mu_l - mu_i) / T #/ scale
+        inc    = mp_incs[:,:,:,:,2] * h * (mu_l - mu_i) #/ scale
+        inc_s  = inc * (mu_l - mu_i) / T
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqldt += use * inc
@@ -193,7 +192,6 @@ def initial_condition(xs, ys, solver, pert):
     s += qw * solver.entropy_vapour(T, qw, density)
 
     qv, ql, qi = solver.solve_fractions_from_entropy(density, qw, s)
-    #  0.3410208713540216 0.10594892674155956 0.6589791286459784
     print('qw min-max:', qw.min(), qw.max())
     print('T min-max:', T.min() - 273, T.max() - 273)
     print('s min-max:', s.min(), s.max(), s.sum()/len(s.flatten()))
@@ -277,10 +275,10 @@ elif rank == 0:
     energy_list = conservation_data[1, :][mask]
     entropy_var_list = conservation_data[2, :][mask]
     water_var_list = conservation_data[3, :][mask]
-    v_power = conservation_data[4, :][mask] * 1.0e-12
-    l_power = conservation_data[5, :][mask] * 1.0e-12
-    i_power = conservation_data[6, :][mask] * 1.0e-12
-    e_power = conservation_data[7, :][mask] * 1.0e-12
+    v_power = conservation_data[4, :][mask]
+    l_power = conservation_data[5, :][mask]
+    i_power = conservation_data[6, :][mask]
+    e_power = conservation_data[7, :][mask]
     v_water = conservation_data[8, :][mask]
     l_water = conservation_data[9, :][mask]
     i_water = conservation_data[10,:][mask]
