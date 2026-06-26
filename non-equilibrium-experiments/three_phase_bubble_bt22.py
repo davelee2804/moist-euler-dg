@@ -36,7 +36,7 @@ a = 0.5
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'bt22-prev_47'
+exp_name_short = 'bt22-prev006'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -54,17 +54,19 @@ comm.barrier()
 zmap = lambda x, z: z * zlim
 xmap = lambda x, z: xlim * (x - 0.5)
 
-vl_power_list = []
-vi_power_list = []
-li_power_list = []
+v_power_list = []
+l_power_list = []
+i_power_list = []
+e_power_list = []
 v_water_list = []
 l_water_list = []
 i_water_list = []
 entropy_list = []
 
-def forcing_function(solver, state, dstatedt):
+def forcing_function(solver, state, dstatedt, state_0, hdt):
     u, w, h, s, qv, ql, qi = solver.get_vars(state)
     dudt, dwdt, dhdt, dsdt, dqvdt, dqldt, dqidt = solver.get_vars(dstatedt)
+    _, _, _, _, qv0, ql0, qi0 = solver.get_vars(state_0)
 
     #s_d = eta_k_to_eta_d(h, s, qv, ql, qi)
 
@@ -73,9 +75,13 @@ def forcing_function(solver, state, dstatedt):
     _, T, _, _, mu_v, mu_l, mu_i = solver.get_thermodynamic_quantities(h, s, qv, ql, qi)
 
     if non_equilibrium_thermo:
+        vp = 0.0
+        lp = 0.0
+        ip = 0.0
+        ep = 0.0
         # parse therodynamic state to pytorch array
-        scale = 1.0e+12
-        hdt = 0.5 * solver.get_dt()
+        #scale = 1.0e+12
+        #hdt = 0.5 * solver.get_dt()
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
                                            qi.flatten(), \
@@ -84,48 +90,60 @@ def forcing_function(solver, state, dstatedt):
                                            h.flatten()]).transpose())
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
+        mp_incs[:,:,:,:,0] = (qv + ql) * mp_incs[:,:,:,:,0]
+        mp_incs[:,:,:,:,1] = (qv + qi) * mp_incs[:,:,:,:,1]
+        mp_incs[:,:,:,:,2] = (ql + qi) * mp_incs[:,:,:,:,2]
         # solution increments from transport for checking monotonicity
         epsilon = 1.0e-14
         # vapor to liquid exchange
-        u_dqv = qv + hdt * dqvdt
-        u_dql = ql + hdt * dqldt
-        u_dqi = qi + hdt * dqidt
-        u_ds  = s  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,0] * h * (mu_v - mu_l) / scale
-        inc_s  = inc * (mu_v - mu_l) / T #/ scale
+        u_dqv = qv0 + hdt * dqvdt
+        u_dql = ql0 + hdt * dqldt
+        u_dqi = qi0 + hdt * dqidt
+        #u_ds  = s0  + hdt * dsdt
+        inc    = mp_incs[:,:,:,:,0] * h * (mu_v - mu_l) #/ scale
+        inc_s  = inc * (mu_v - mu_l) / T
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dql - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
         dqldt -= use * inc
         dsdt  -= use * inc_s
-        vl_power_list.append(solver.integrate(use*h*inc_s*T))
+        vp += solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*mu_v*(mu_v - mu_l))
+        lp -= solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*mu_l*(mu_v - mu_l))
+        ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,0]*(mu_v - mu_l)*(mu_v - mu_l))
         # vapor to ice exchange
-        u_dqv = qv + hdt * dqvdt
-        u_dql = ql + hdt * dqldt
-        u_dqi = qi + hdt * dqidt
-        u_ds  = s  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,1] * h * (mu_v - mu_i) / scale
-        inc_s  = inc * (mu_v - mu_i) / T #/ scale
+        u_dqv = qv0 + hdt * dqvdt
+        u_dql = ql0 + hdt * dqldt
+        u_dqi = qi0 + hdt * dqidt
+        #u_ds  = s0  + hdt * dsdt
+        inc    = mp_incs[:,:,:,:,1] * h * (mu_v - mu_i) #/ scale
+        inc_s  = inc * (mu_v - mu_i) / T
         use    = np.logical_and(u_dqv + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqvdt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
-        vi_power_list.append(solver.integrate(use*h*inc_s*T))
+        vp += solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*mu_v*(mu_v - mu_i))
+        ip -= solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*mu_i*(mu_v - mu_i))
+        ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,1]*(mu_v - mu_i)*(mu_v - mu_i))
         # liquid to ice exchange
-        u_dqv = qv + hdt * dqvdt
-        u_dql = ql + hdt * dqldt
-        u_dqi = qi + hdt * dqidt
-        u_ds  = s  + hdt * dsdt
-        inc    = mp_incs[:,:,:,:,2] * h * (mu_l - mu_i) / scale
-        inc_s  = inc * (mu_l - mu_i) / T #/ scale
+        u_dqv = qv0 + hdt * dqvdt
+        u_dql = ql0 + hdt * dqldt
+        u_dqi = qi0 + hdt * dqidt
+        #u_ds  = s0  + hdt * dsdt
+        inc    = mp_incs[:,:,:,:,2] * h * (mu_l - mu_i) #/ scale
+        inc_s  = inc * (mu_l - mu_i) / T
         use    = np.logical_and(u_dql + hdt * inc > epsilon, u_dqi - hdt * inc > epsilon)
         #use    = np.logical_and(use, u_ds - hdt * inc_s > epsilon)
         dqldt += use * inc
         dqidt -= use * inc
         dsdt  -= use * inc_s
-        li_power_list.append(solver.integrate(use*h*inc_s*T))
-
+        lp += solver.integrate(use*h*h*mp_incs[:,:,:,:,2]*mu_l*(mu_l - mu_i))
+        ip -= solver.integrate(use*h*h*mp_incs[:,:,:,:,2]*mu_i*(mu_l - mu_i))
+        ep -= solver.integrate(use*h*h*mp_incs[:,:,:,:,2]*(mu_l - mu_i)*(mu_l - mu_i))
+        v_power_list.append(vp)
+        l_power_list.append(lp)
+        i_power_list.append(ip)
+        e_power_list.append(ep)
         v_water_list.append(solver.integrate(h*qv))
         l_water_list.append(solver.integrate(h*ql))
         i_water_list.append(solver.integrate(h*qi))
@@ -291,18 +309,19 @@ if run_model:
         solver.save(solver.get_filepath(data_dir, exp_name_short))
 
     if rank == 0:
-        conservation_data = np.zeros((11, len(time_list)))
+        conservation_data = np.zeros((12, len(time_list)))
         conservation_data[0, :] = np.array(time_list)
         conservation_data[1, :] = np.array(energy_list)
         conservation_data[2, :] = np.array(entropy_var_list)
         conservation_data[3, :] = np.array(water_var_list)
-        conservation_data[4, :] = np.array(vl_power_list)[::8]
-        conservation_data[5, :] = np.array(vi_power_list)[::8]
-        conservation_data[6, :] = np.array(li_power_list)[::8]
-        conservation_data[7, :] = np.array(v_water_list)[::8]
-        conservation_data[8, :] = np.array(l_water_list)[::8]
-        conservation_data[9, :] = np.array(i_water_list)[::8]
-        conservation_data[10,:] = np.array(entropy_list)[::8]
+        conservation_data[4, :] = np.array(v_power_list)[::4]
+        conservation_data[5, :] = np.array(l_power_list)[::4]
+        conservation_data[6, :] = np.array(i_power_list)[::4]
+        conservation_data[7, :] = np.array(e_power_list)[::4]
+        conservation_data[8, :] = np.array(v_water_list)[::4]
+        conservation_data[9, :] = np.array(l_water_list)[::4]
+        conservation_data[10,:] = np.array(i_water_list)[::4]
+        conservation_data[11,:] = np.array(entropy_list)[::4]
         np.save(conservation_data_fp, conservation_data)
 
         print('Energy error:', (energy_list[-1] - energy_list[0]) / energy_list[0])
@@ -320,13 +339,14 @@ elif rank == 0:
     energy_list = conservation_data[1, :][mask]
     entropy_var_list = conservation_data[2, :][mask]
     water_var_list = conservation_data[3, :][mask]
-    vl_power = conservation_data[4, :][mask]
-    vi_power = conservation_data[5, :][mask]
-    li_power = conservation_data[6, :][mask]
-    v_water = conservation_data[7, :][mask]
-    l_water = conservation_data[8, :][mask]
-    i_water = conservation_data[9, :][mask]
-    entropy = conservation_data[10,:][mask]
+    v_power = conservation_data[4, :][mask]
+    l_power = conservation_data[5, :][mask]
+    i_power = conservation_data[6, :][mask]
+    e_power = conservation_data[7, :][mask]
+    v_water = conservation_data[8, :][mask]
+    l_water = conservation_data[9, :][mask]
+    i_water = conservation_data[10,:][mask]
+    entropy = conservation_data[11,:][mask]
     time_list = time_list[mask]
 
     e_diff = abs(np.diff(energy_list))
@@ -353,14 +373,16 @@ elif rank == 0:
     plt.savefig(fp, bbox_inches="tight")
 
     plt.figure()
-    plt.plot(time_list[1:], vl_power[1:], label='Vapor-liquid power')
-    plt.plot(time_list[1:], vi_power[1:], label='Vapor-ice power')
-    plt.plot(time_list[1:], li_power[1:], label='Liquid-ice power')
-    plt.plot(time_list[1:], vl_power[1:] + vi_power[1:] + li_power[1:], label='Total')
+    plt.plot(time_list[1:], v_power[1:], label='Vapor')
+    plt.plot(time_list[1:], l_power[1:], label='Liquid')
+    plt.plot(time_list[1:], i_power[1:], label='Ice')
+    plt.plot(time_list[1:], e_power[1:], label='Entropy')
+    plt.plot(time_list[1:], v_power[1:] + l_power[1:] + i_power[1:] + e_power[1:], label='Total')
     plt.grid()
     plt.legend()
     plt.ylabel('Watts (J/s)')
     plt.xlabel('Time (s)')
+    plt.title('Power')
     plt.yscale('symlog', linthresh=1e-15)
     fp = os.path.join(plot_dir, f'power_{exp_name_short}')
     plt.savefig(fp, bbox_inches="tight")
