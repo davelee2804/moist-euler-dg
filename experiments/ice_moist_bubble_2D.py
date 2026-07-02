@@ -1,6 +1,6 @@
 from matplotlib import pyplot as plt
 # from moist_euler_dg.three_phase_euler_2D import ThreePhaseEuler2D
-from moist_euler_dg.fortran_three_phase_euler_2D import FortranThreePhaseEuler2D as ThreePhaseEuler2D
+#from moist_euler_dg.fortran_three_phase_euler_2D import FortranThreePhaseEuler2D as ThreePhaseEuler2D
 import numpy as np
 import time
 import os
@@ -8,7 +8,7 @@ import argparse
 from mpi4py import MPI
 import matplotlib.ticker as ticker
 import cmocean
-
+from three_phase_euler_2D import *
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -34,7 +34,7 @@ poly_order = args.o
 a = 0.0
 upwind = True
 
-exp_name_short = 'ice-bubble'
+exp_name_short = 'ice-bubble-eq-2'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -98,14 +98,17 @@ def initial_condition(xs, ys, solver, pert):
 
 run_time = 600
 
-tends = np.array([0.0, 200.0, 400.0, 600.0])
-# tends = np.array([0.0, 200.0, 400.0, 479.0])
+tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
 time_list = []
 energy_list = []
 entropy_var_list = []
 water_var_list = []
+v_water_list = []
+l_water_list = []
+i_water_list = []
+entropy_list = []
 
 if run_model:
     solver = ThreePhaseEuler2D(xmap, zmap, poly_order, nx, g=g, cfl=cfl, a=a, nz=nz, upwind=upwind, nprocx=nproc)
@@ -118,6 +121,10 @@ if run_model:
             energy_list.append(solver.energy())
             entropy_var_list.append(solver.integrate(solver.h * solver.s**2))
             water_var_list.append(solver.integrate(solver.h * solver.q**2))
+            v_water_list.append(solver.integrate(solver.h*solver.qv))
+            l_water_list.append(solver.integrate(solver.h*solver.ql))
+            i_water_list.append(solver.integrate(solver.h*solver.qi))
+            entropy_list.append(solver.integrate(solver.h*solver.s))
 
             dt = min(solver.get_dt(), tend - solver.time)
             solver.time_step(dt=dt)
@@ -130,18 +137,21 @@ if run_model:
         solver.save(solver.get_filepath(data_dir, exp_name_short))
 
     if rank == 0:
-        conservation_data = np.zeros((4, len(time_list)))
+        conservation_data = np.zeros((8, len(time_list)))
         conservation_data[0, :] = np.array(time_list)
         conservation_data[1, :] = np.array(energy_list)
         conservation_data[2, :] = np.array(entropy_var_list)
         conservation_data[3, :] = np.array(water_var_list)
+        conservation_data[4, :] = np.array(v_water_list)
+        conservation_data[5, :] = np.array(l_water_list)
+        conservation_data[6, :] = np.array(i_water_list)
+        conservation_data[7, :] = np.array(entropy_list)
         np.save(conservation_data_fp, conservation_data)
 
         print('Energy error:', (energy_list[-1] - energy_list[0]) / energy_list[0])
 
     print('Time of first limit:', solver.first_water_limit_time)
         
-
 # plotting
 elif rank == 0:
     plt.rcParams['font.size'] = '12'
@@ -152,11 +162,15 @@ elif rank == 0:
     energy_list = conservation_data[1, :][mask]
     entropy_var_list = conservation_data[2, :][mask]
     water_var_list = conservation_data[3, :][mask]
+    v_water = conservation_data[4, :][mask]
+    l_water = conservation_data[5, :][mask]
+    i_water = conservation_data[6, :][mask]
+    entropy = conservation_data[7, :][mask]
     time_list = time_list[mask]
 
     e_diff = abs(np.diff(energy_list))
     print('Time max energy growth:', time_list[np.argmax(e_diff) + 1])
-    
+
     energy_list = (energy_list - energy_list[0]) / energy_list[0]
     entropy_var_list = (entropy_var_list - entropy_var_list[0]) / entropy_var_list[0]
     water_var_list = (water_var_list - water_var_list[0]) / water_var_list[0]
@@ -177,6 +191,22 @@ elif rank == 0:
     fp = os.path.join(plot_dir, f'conservation_{exp_name_short}')
     plt.savefig(fp, bbox_inches="tight")
 
+    plt.figure()
+    t_water = v_water + l_water + i_water
+    plt.plot(time_list[1:], v_water[1:], label='Vapor')
+    plt.plot(time_list[1:], l_water[1:], label='Liquid')
+    plt.plot(time_list[1:], i_water[1:], label='Ice')
+    plt.plot(time_list[1:], (t_water[1:]-t_water[0])/t_water[0], label='Total water change (normalised)')
+    plt.plot(time_list[1:], (entropy[1:]-entropy[0])/entropy[0], label='Entropy change (normalised)')
+    plt.grid()
+    plt.legend()
+    plt.ylabel('Mass (kg)')
+    plt.xlabel('Time (s)')
+    plt.title('Water')
+    plt.yscale('symlog', linthresh=1e-15)
+    fp = os.path.join(plot_dir, f'water_{exp_name_short}')
+    plt.savefig(fp, bbox_inches="tight")
+
     solver_plot = ThreePhaseEuler2D(xmap, zmap, poly_order, nx, g=g, cfl=0.5, a=a, nz=nz, upwind=upwind, nprocx=1)
     _, _, _, s0, qw0, qv0, ql0, qi0 = initial_condition(solver_plot.xs, solver_plot.zs, solver_plot, pert=0.0)
 
@@ -185,6 +215,7 @@ elif rank == 0:
         b = int(b)
         return r'${} \times 10^{{{}}}$'.format(a, b)
 
+
     plot_func_entropy = lambda s: s.project_H1(s.s - s0)
     plot_func_density = lambda s: s.project_H1(s.h)
     plot_func_water = lambda s: s.project_H1(s.q - qw0)
@@ -192,32 +223,35 @@ elif rank == 0:
     plot_func_liquid = lambda s: s.project_H1(s.solve_fractions_from_entropy(s.h, s.q, s.s)[1])
     plot_func_ice = lambda s: s.project_H1(s.solve_fractions_from_entropy(s.h, s.q, s.s)[2])
 
-    fig_list = [plt.subplots(2, 2, sharex=True, sharey=True, figsize=(7.4, 4.8)) for _ in range(6)]
+    fig_list = [plt.subplots(2, 3, sharex=True, sharey=True, figsize=(7.4, 4.8)) for _ in range(6)]
 
     pfunc_list = [
-        plot_func_entropy, plot_func_density,
-        plot_func_water, plot_func_vapour, plot_func_liquid, plot_func_ice
+        plot_func_entropy, plot_func_density, plot_func_water, plot_func_vapour, plot_func_liquid, plot_func_ice
     ]
 
     labels = ["entropy", "density", "water", "vapour", "liquid", "ice"]
 
     energy = []
+    tends = np.array([100.0, 200.0, 300.0, 400.0, 500.0, 600.0])
     for i, tend in enumerate(tends):
         filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
         solver_plot.load(filepaths)
         energy.append(solver_plot.integrate(solver_plot.energy()))
 
         for (fig, axs), plot_fun, label in zip(fig_list, pfunc_list, labels):
-            ax = axs[i // 2][i % 2]
+            ax = axs[i // 3][i % 3]
             ax.tick_params(labelsize=8)
+            #ax.set_box_aspect(0.33)
 
             if label == 'ice':
-                levels = np.linspace(0.0, 7e-3, 1000)
-                cmap = cmap=cmocean.cm.ice
+                # levels = np.linspace(0.0, 7e-3, 1000)
+                levels = 1000
+                cmap = cmap = cmocean.cm.ice
             elif label == 'entropy':
-                levels = np.linspace(-30, 70, 1000)
-                # levels = 1000
-                cmap = cmap = cmocean.cm.thermal
+                # levels = np.linspace(-30, 70, 1000)
+                levels = 1000
+                #cmap = cmap = cmocean.cm.thermal
+                cmap = 'nipy_spectral'
             else:
                 levels = 1000
                 cmap = 'nipy_spectral'
@@ -229,18 +263,69 @@ elif rank == 0:
             #     cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), label='Density ($\text{kg m}^{-3}$)')
             # else:
             #     cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), label=f'{label.capitalize() mass fraction'})
-            cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt))
+            #cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt))
+            cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='horizontal')
+            ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+            cbar.set_ticks(ticks)
             cbar.ax.tick_params(labelsize=8)
 
-            if (i // 2) == 1:
+            if (i // 3) == 1:
                 ax.set_xlabel('x (m)', fontsize='xx-small')
-            if (i % 2) == 0:
+            if (i % 3) == 0:
                 ax.set_ylabel('z (m)', fontsize='xx-small')
             # fig.tight_layout(w_pad=1.0, h_pad=1.0)
             fig.tight_layout()
 
-
     for (fig, ax), label in zip(fig_list, labels):
         plot_name = f'{label}_{exp_name_short}'
+        fp = solver_plot.get_filepath(plot_dir, plot_name, ext='png')
+        fig.savefig(fp, bbox_inches="tight")
+
+    tends = np.array([100.0, 200.0, 300.0, 400.0, 500.0, 600.0])
+    for tend in tends:
+        filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
+        solver_plot.load(filepaths)
+        fig, axs = plt.subplots(2, 2, sharex=True, sharey=True, figsize=(7.4, 4.8))
+        # entropy
+        ax = axs[0][0]
+        ax.set_title('Entropy perturbation',fontsize=10)
+        ax.tick_params(labelsize=8)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_entropy, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        # vapour
+        ax = axs[0][1]
+        ax.tick_params(labelsize=8)
+        ax.set_title('Vapour',fontsize=10)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_vapour, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        # liquid
+        ax = axs[1][0]
+        ax.set_title('Liquid',fontsize=10)
+        ax.tick_params(labelsize=8)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_liquid, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        # ice
+        ax = axs[1][1]
+        ax.set_title('Ice',fontsize=10)
+        ax.tick_params(labelsize=8)
+        im = solver_plot.plot_solution(ax, dim=2, plot_func=plot_func_ice, levels=1000, cmap='nipy_spectral')
+        cbar = plt.colorbar(im, ax=ax, format=ticker.FuncFormatter(fmt), orientation='vertical')
+        ticks = np.linspace(im.norm.vmin, im.norm.vmax, 3)
+        cbar.set_ticks(ticks)
+        cbar.ax.tick_params(labelsize=8)
+
+        plot_name = f'{exp_name_short}_{tend}'
         fp = solver_plot.get_filepath(plot_dir, plot_name, ext='png')
         fig.savefig(fp, bbox_inches="tight")
