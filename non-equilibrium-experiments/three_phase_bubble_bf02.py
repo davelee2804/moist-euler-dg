@@ -107,7 +107,7 @@ a = 0
 upwind = True
 non_equilibrium_thermo = True
 
-exp_name_short = 'bf02-prev_73-5-2'
+exp_name_short = 'bf02-repo4'
 if a == 0:
     exp_name_short = exp_name_short + '-energy-conserving'
 experiment_name = f'{exp_name_short}-nx-{nx}-nz-{nz}-p{poly_order}'
@@ -163,11 +163,16 @@ def forcing_function(solver, state, dstatedt, state_0, hdt):
         ip = 0.0
         ep = 0.0
         # parse therodynamic state to pytorch array
+        #nn_in = torch.from_numpy(np.array([qv.flatten(), \
+        #                                   ql.flatten(), \
+        #                                   qi.flatten(), \
+        #                                   s.flatten(), \
+        #                                   h.flatten()]).transpose())
         nn_in = torch.from_numpy(np.array([qv.flatten(), \
                                            ql.flatten(), \
                                            qi.flatten(), \
                                            s.flatten(), \
-                                           h.flatten()]).transpose())
+                                           h.flatten()]).transpose().astype(np.float32))
         # evaluate the nn and parse back as numpy array
         mp_incs = model(nn_in).detach().numpy().reshape([T.shape[0],T.shape[1],T.shape[2],T.shape[3],3])
         mp_incs[:,:,:,:,0] = (qv + ql) * mp_incs[:,:,:,:,0]
@@ -281,7 +286,7 @@ def initial_condition(xs, ys, solver, pert):
 
     return u, v, density, s, qw, qv, ql, qi
 
-tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0])
+tends = np.array([0.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0, 550.0, 600.0, 650.0, 700.0, 750.0, 800.0])
 
 conservation_data_fp = os.path.join(data_dir, 'conservation_data.npy')
 time_list = []
@@ -290,9 +295,12 @@ entropy_var_list = []
 water_var_list = []
 
 if non_equilibrium_thermo:
-    model_path = '/g/data/dp9/dl9118/lfric_ral_training/runs/nAdv_nEta_wBatch/prev_73/model_min_loss_5.pt'
-    model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
-    model.eval()
+    model_path = '/g/data/dp9/dl9118/lfric_ral_training/repo4/src/results/model_min_loss_17.pt'
+    #model = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
+    #model.eval()
+    checkpoint = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
+    model = MoistExchangesNN()
+    model.load_state_dict(checkpoint['model_state_dict'])
 
 if run_model:
     solver = _NonEqEuler2D(
@@ -442,7 +450,7 @@ elif rank == 0:
     labels = ["entropy", "density", "water", "vapour", "liquid", "ice"]
 
     energy = []
-    tends = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0])
+    tends = np.array([0.0, 200.0, 300.0, 400.0, 500.0, 600.0])
     for i, tend in enumerate(tends):
         filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
         solver_plot.load(filepaths)
@@ -491,7 +499,7 @@ elif rank == 0:
         fp = solver_plot.get_filepath(plot_dir, plot_name, ext='png')
         fig.savefig(fp, bbox_inches="tight")
 
-    tends = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0])
+    tends = np.array([0.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0, 550.0, 600.0, 650.0, 700.0, 750.0, 800.0])
     for tend in tends:
         filepaths = [solver_plot.get_filepath(data_dir, exp_name_short, proc=i, nprocx=nproc, time=tend) for i in range(nproc)]
         solver_plot.load(filepaths)
